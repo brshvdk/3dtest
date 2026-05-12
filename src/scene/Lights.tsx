@@ -5,16 +5,20 @@ export function Lights() {
   const width = useRoomStore((s) => s.width);
   const height = useRoomStore((s) => s.height);
 
-  // Размер ортогональной shadow-камеры подбираем под комнату.
   const half = Math.max(length, width);
 
   return (
     <>
-      <ambientLight intensity={0.45} />
-      <hemisphereLight args={["#cbe2ff", "#3a2a1c", 0.25]} />
+      {/* Окружающий свет — общий уровень. */}
+      <ambientLight intensity={0.35} />
+
+      {/* Полусферический — тёплый низ от пола, прохладный верх от потолка/неба. */}
+      <hemisphereLight args={["#dbe7ff", "#3a2a1c", 0.4]} />
+
+      {/* Главный направленный свет (имитация солнца в окно). */}
       <directionalLight
-        position={[length * 0.6, height * 2, width * 0.7]}
-        intensity={1.4}
+        position={[length * 0.7, height * 2.2, width * 0.9]}
+        intensity={1.5}
         castShadow
         shadow-mapSize-width={2048}
         shadow-mapSize-height={2048}
@@ -23,11 +27,25 @@ export function Lights() {
         shadow-camera-top={half}
         shadow-camera-bottom={-half}
         shadow-camera-near={0.5}
-        shadow-camera-far={height * 3 + half}
+        shadow-camera-far={height * 4 + half}
         shadow-bias={-0.0005}
       />
-      {/* Лёгкий заполняющий point внутри комнаты для подсветки теней. */}
-      <pointLight position={[0, height * 0.85, 0]} intensity={0.35} distance={Math.max(length, width) * 2} />
+
+      {/* Контровой свет с противоположной стороны — заполняет тени. */}
+      <directionalLight
+        position={[-length * 0.6, height * 1.3, -width * 0.5]}
+        intensity={0.45}
+        color="#fff5e0"
+      />
+
+      {/* Точечный внутри комнаты — даёт читаемые блики на лаке пола. */}
+      <pointLight
+        position={[0, height * 0.88, 0]}
+        intensity={0.7}
+        distance={Math.max(length, width) * 2.2}
+        decay={1.6}
+        color="#fff2dc"
+      />
     </>
   );
 }

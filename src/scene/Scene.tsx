@@ -12,7 +12,13 @@ export function Scene() {
   const width = useRoomStore((s) => s.width);
   const height = useRoomStore((s) => s.height);
 
-  const camDist = Math.max(length, width) * 0.9;
+  // Камера на старте — слегка приподнята над комнатой и сдвинута за её
+  // дальний угол, смотрит на центр пола. Так с первого кадра видны
+  // все 4 стены изнутри (через "BackSide"-просвет ближних стен) и пол.
+  const diag = Math.hypot(length, width);
+  const camX = diag * 0.55;
+  const camY = height * 1.05;
+  const camZ = diag * 0.55;
 
   return (
     <Canvas
@@ -21,7 +27,7 @@ export function Scene() {
       gl={{
         antialias: true,
         toneMapping: ACESFilmicToneMapping,
-        toneMappingExposure: 1.05,
+        toneMappingExposure: 1.0,
         localClippingEnabled: true,
       }}
     >
@@ -29,17 +35,17 @@ export function Scene() {
 
       <PerspectiveCamera
         makeDefault
-        position={[camDist, height * 1.4, camDist]}
-        fov={45}
+        position={[camX, camY, camZ]}
+        fov={42}
         near={0.05}
         far={100}
       />
       <OrbitControls
-        target={[0, height * 0.4, 0]}
+        target={[0, 0.1, 0]}
         enableDamping
         dampingFactor={0.08}
         minDistance={1}
-        maxDistance={25}
+        maxDistance={30}
         maxPolarAngle={Math.PI / 2 - 0.02}
       />
 
