@@ -1,0 +1,38 @@
+.panel-right .stat {
+  background: #1c1d20;
+  border: 1px solid #2e2f33;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.stat-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 4px 0;
+  font-size: 13px;
+  color: #c8c8cc;
+}
+
+.stat-row b {
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.stat-row.hero b {
+  color: #f0c060;
+  font-size: 15px;
+}
+
+.footnote {
+  margin-top: 18px;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: #8e8e93;
+  background: #1c1d20;
+  border-radius: 6px;
+  border: 1px dashed #34353a;
+}
