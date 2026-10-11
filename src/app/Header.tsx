@@ -4,6 +4,7 @@ import { buildShareUrl, encodeProject } from "../domain/share";
 import { pluralize } from "../domain/units";
 import { Icon, IconButton, MenuButton, toast, useIsMobile, type MenuEntry } from "../ui/kit";
 import { useTheme } from "./theme";
+import { CAN_PRINT, CAN_SHARE } from "./env";
 import { openArchived, startNewProject, useArchive } from "./projects";
 
 const MODULES = [
@@ -60,7 +61,9 @@ export function Header() {
     { id: "rename", label: "Переименовать проект", icon: "edit", onSelect: () => setEditing(true) },
     ...(isMobile
       ? ([
-          { id: "print", label: "Печать / PDF", icon: "print", onSelect: () => window.print() },
+          ...(CAN_PRINT
+            ? ([{ id: "print", label: "Печать / PDF", icon: "print", onSelect: () => window.print() }] satisfies MenuEntry[])
+            : []),
           {
             id: "theme",
             label: dark ? "Светлая тема" : "Тёмная тема",
@@ -155,10 +158,10 @@ export function Header() {
         <IconButton icon="undo" label="Отменить (Ctrl+Z)" onClick={undo} disabled={!canUndo} />
         <IconButton icon="redo" label="Повторить (Ctrl+Shift+Z)" onClick={redo} disabled={!canRedo} />
         <span className="app-header__sep" />
-        <IconButton icon="link" label="Поделиться ссылкой" onClick={share} />
+        {CAN_SHARE ? <IconButton icon="link" label="Поделиться ссылкой" onClick={share} /> : null}
         {!isMobile ? (
           <>
-            <IconButton icon="print" label="Печать / PDF" onClick={() => window.print()} />
+            {CAN_PRINT ? <IconButton icon="print" label="Печать / PDF" onClick={() => window.print()} /> : null}
             <IconButton
               icon={dark ? "sun" : "moon"}
               label={dark ? "Светлая тема" : "Тёмная тема"}

@@ -21,6 +21,7 @@ import { CutPlan } from "./CutPlan";
 import { CalcDetails, ExtraDetails } from "./ResultsDetails";
 import { countText, joinRu, meters, pctText, stockText, typo, unitForms } from "./format";
 import { buildOrderText } from "./orderText";
+import { CAN_PRINT, CAN_SHARE } from "../app/env";
 import "./results.css";
 
 /* ------------------------------ Действия ------------------------------ */
@@ -60,7 +61,7 @@ async function copyOrder() {
   else toast("Не удалось скопировать — браузер не дал доступ к буферу обмена", "warning");
 }
 
-const canShare = typeof navigator !== "undefined" && typeof navigator.share === "function";
+const canShare = CAN_SHARE && typeof navigator !== "undefined" && typeof navigator.share === "function";
 
 async function shareOrder() {
   const { text, title } = currentOrderText();
@@ -292,9 +293,11 @@ const OrderTable = memo(function OrderTable({ estimate }: { estimate: ProjectEst
         <Button variant="primary" icon="copy" onClick={copyOrder}>
           Скопировать список
         </Button>
-        <Button icon="print" onClick={printSheet}>
-          Печать / PDF
-        </Button>
+        {CAN_PRINT ? (
+          <Button icon="print" onClick={printSheet}>
+            Печать / PDF
+          </Button>
+        ) : null}
         {canShare ? <Button icon="share" onClick={shareOrder} aria-label="Отправить список" title="Отправить список" /> : null}
       </div>
     </Section>
