@@ -1,0 +1,157 @@
+/* Дизайн-токены. Светлая тема по умолчанию, тёмная — по системной настройке
+   или явному data-theme="dark" на <html>. */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f3f2ee;
+  --surface: #ffffff;
+  --surface-2: #f7f6f3;
+  --surface-3: #eeece7;
+  --border: #e3e0d9;
+  --border-strong: #cfcbc2;
+  --text: #1b1b1f;
+  --text-2: #53535b;
+  --text-3: #85858e;
+
+  --primary: #2f5bd3;
+  --primary-hover: #244bb5;
+  --primary-weak: #e9eefc;
+  --primary-weak-2: #d7e1fb;
+  --on-primary: #ffffff;
+
+  --accent: #ee6a1b;
+  --accent-weak: #fdeee3;
+
+  --success: #198754;
+  --success-weak: #e5f4ec;
+  --warning: #9a6408;
+  --warning-weak: #fdf4e2;
+  --danger: #cf3c3c;
+  --danger-weak: #fcebeb;
+
+  /* План */
+  --plan-bg: #f7f6f2;
+  --plan-grid: #ebe8e1;
+  --plan-grid-major: #dcd8cf;
+  --plan-floor: #ffffff;
+  --plan-wall: #2e3136;
+  --plan-wall-hover: #4a4f57;
+  --plan-dim: #3a3a40;
+  --plan-door: #2f5bd3;
+  --plan-window: #3d9bd8;
+  --plan-furniture: #b9b3a6;
+  --plan-skirting: #ee6a1b;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  --shadow-sm: 0 1px 2px rgba(22, 22, 30, 0.06);
+  --shadow-md: 0 4px 14px rgba(22, 22, 30, 0.08), 0 1px 3px rgba(22, 22, 30, 0.05);
+  --shadow-lg: 0 14px 40px rgba(22, 22, 30, 0.14), 0 2px 8px rgba(22, 22, 30, 0.06);
+
+  --font: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-base: 14px;
+  --fs-lg: 16px;
+  --fs-xl: 20px;
+  --fs-2xl: 28px;
+
+  --header-h: 56px;
+  --sidebar-w: 348px;
+  --results-w: 368px;
+
+  --focus-ring: 0 0 0 3px rgba(47, 91, 211, 0.28);
+  --transition: 140ms ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121316;
+    --surface: #1b1c20;
+    --surface-2: #222328;
+    --surface-3: #2a2c32;
+    --border: #2f3137;
+    --border-strong: #3d4048;
+    --text: #ececef;
+    --text-2: #a8a9b2;
+    --text-3: #757783;
+    --primary: #6f93ff;
+    --primary-hover: #87a5ff;
+    --primary-weak: rgba(111, 147, 255, 0.14);
+    --primary-weak-2: rgba(111, 147, 255, 0.24);
+    --on-primary: #0d1430;
+    --accent: #ff8a3d;
+    --accent-weak: rgba(255, 138, 61, 0.14);
+    --success: #4cc38a;
+    --success-weak: rgba(76, 195, 138, 0.14);
+    --warning: #f0b955;
+    --warning-weak: rgba(240, 185, 85, 0.12);
+    --danger: #ff6b6b;
+    --danger-weak: rgba(255, 107, 107, 0.13);
+    --plan-bg: #16171a;
+    --plan-grid: #202226;
+    --plan-grid-major: #292b30;
+    --plan-floor: #1e1f23;
+    --plan-wall: #c9ccd3;
+    --plan-wall-hover: #e2e4e9;
+    --plan-dim: #c3c4cb;
+    --plan-door: #7d9cff;
+    --plan-window: #5ab4ea;
+    --plan-furniture: #5b5850;
+    --plan-skirting: #ff8a3d;
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+    --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.55);
+    --focus-ring: 0 0 0 3px rgba(111, 147, 255, 0.35);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121316;
+  --surface: #1b1c20;
+  --surface-2: #222328;
+  --surface-3: #2a2c32;
+  --border: #2f3137;
+  --border-strong: #3d4048;
+  --text: #ececef;
+  --text-2: #a8a9b2;
+  --text-3: #757783;
+  --primary: #6f93ff;
+  --primary-hover: #87a5ff;
+  --primary-weak: rgba(111, 147, 255, 0.14);
+  --primary-weak-2: rgba(111, 147, 255, 0.24);
+  --on-primary: #0d1430;
+  --accent: #ff8a3d;
+  --accent-weak: rgba(255, 138, 61, 0.14);
+  --success: #4cc38a;
+  --success-weak: rgba(76, 195, 138, 0.14);
+  --warning: #f0b955;
+  --warning-weak: rgba(240, 185, 85, 0.12);
+  --danger: #ff6b6b;
+  --danger-weak: rgba(255, 107, 107, 0.13);
+  --plan-bg: #16171a;
+  --plan-grid: #202226;
+  --plan-grid-major: #292b30;
+  --plan-floor: #1e1f23;
+  --plan-wall: #c9ccd3;
+  --plan-wall-hover: #e2e4e9;
+  --plan-dim: #c3c4cb;
+  --plan-door: #7d9cff;
+  --plan-window: #5ab4ea;
+  --plan-furniture: #5b5850;
+  --plan-skirting: #ff8a3d;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 14px 40px rgba(0, 0, 0, 0.55);
+  --focus-ring: 0 0 0 3px rgba(111, 147, 255, 0.35);
+}

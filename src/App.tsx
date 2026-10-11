@@ -1,15 +1,29 @@
-import { Scene } from "./scene/Scene";
-import { ControlPanel } from "./ui/ControlPanel";
-import { StatsPanel } from "./ui/StatsPanel";
+import { Header } from "./app/Header";
+import { Sidebar } from "./app/Sidebar";
+import { Stage } from "./app/Stage";
+import { useHotkeys } from "./app/useHotkeys";
+import { ResultsPanel } from "./results/ResultsPanel";
+import { PrintSheet } from "./results/PrintSheet";
+import { ToastHost, useIsCompact } from "./ui/kit";
 
 export default function App() {
+  useHotkeys();
+  const compact = useIsCompact();
+
   return (
     <div className="app">
-      <ControlPanel />
-      <div className="canvas-wrap">
-        <Scene />
+      <Header />
+      <div className={`workspace${compact ? " is-compact" : ""}`}>
+        <Sidebar showResultTab={compact} />
+        <Stage />
+        {!compact ? (
+          <aside className="results-col scroll" aria-label="Расчёт">
+            <ResultsPanel />
+          </aside>
+        ) : null}
       </div>
-      <StatsPanel />
+      <ToastHost />
+      <PrintSheet />
     </div>
   );
 }

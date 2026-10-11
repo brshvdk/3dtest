@@ -1,0 +1,601 @@
+/* ============================== Button ============================== */
+
+.k-btn {
+  --btn-h: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: var(--btn-h);
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: var(--fs-md);
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  user-select: none;
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    color var(--transition),
+    box-shadow var(--transition);
+}
+.k-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.k-btn--sm {
+  --btn-h: 30px;
+  padding: 0 10px;
+  font-size: var(--fs-sm);
+  gap: 5px;
+}
+.k-btn--lg {
+  --btn-h: 44px;
+  padding: 0 18px;
+  font-size: var(--fs-base);
+}
+.k-btn--block {
+  display: flex;
+  width: 100%;
+}
+.k-btn--icon-only {
+  width: var(--btn-h);
+  padding: 0;
+}
+
+.k-btn--primary {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.k-btn--primary:not(:disabled):hover {
+  background: var(--primary-hover);
+}
+.k-btn--accent {
+  background: var(--accent);
+  color: #fff;
+}
+.k-btn--accent:not(:disabled):hover {
+  filter: brightness(0.95);
+}
+.k-btn--secondary {
+  background: var(--surface);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.k-btn--secondary:not(:disabled):hover {
+  background: var(--surface-2);
+  border-color: var(--text-3);
+}
+.k-btn--secondary.is-active {
+  background: var(--primary-weak);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.k-btn--ghost {
+  background: transparent;
+  color: var(--text-2);
+}
+.k-btn--ghost:not(:disabled):hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.k-btn--ghost.is-active {
+  background: var(--primary-weak);
+  color: var(--primary);
+}
+.k-btn--danger {
+  background: transparent;
+  color: var(--danger);
+  border-color: var(--border-strong);
+}
+.k-btn--danger:not(:disabled):hover {
+  background: var(--danger-weak);
+  border-color: var(--danger);
+}
+
+/* ============================= Segmented ============================ */
+
+.k-seg {
+  display: inline-flex;
+  padding: 3px;
+  gap: 2px;
+  background: var(--surface-3);
+  border-radius: calc(var(--radius-sm) + 2px);
+}
+.k-seg--block {
+  display: flex;
+  width: 100%;
+}
+.k-seg--block > button {
+  flex: 1 1 0;
+}
+.k-seg > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--fs-md);
+  font-weight: 550;
+  white-space: nowrap;
+  transition:
+    background var(--transition),
+    color var(--transition),
+    box-shadow var(--transition);
+}
+.k-seg > button > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.k-seg--sm > button {
+  height: 26px;
+  padding: 0 9px;
+  font-size: var(--fs-sm);
+}
+.k-seg > button:hover:not(:disabled) {
+  color: var(--text);
+}
+.k-seg > button.is-active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.k-seg > button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ============================== Fields ============================== */
+
+.k-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.k-field--inline {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.k-field--inline .k-field__control {
+  flex: 0 0 132px;
+}
+.k-field__label {
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  color: var(--text-2);
+}
+.k-field__hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.35;
+}
+
+.k-input {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 36px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition:
+    border-color var(--transition),
+    box-shadow var(--transition);
+}
+.k-input:hover {
+  border-color: var(--text-3);
+}
+.k-input:focus-within {
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring);
+}
+.k-input.is-error {
+  border-color: var(--danger);
+  animation: k-shake 0.3s;
+}
+.k-input.is-disabled {
+  opacity: 0.5;
+}
+.k-input input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font-size: var(--fs-base);
+  font-variant-numeric: tabular-nums;
+}
+.k-input__suffix {
+  flex: none;
+  padding-right: 10px;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  pointer-events: none;
+}
+@keyframes k-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+
+.k-select {
+  position: relative;
+}
+.k-select select {
+  appearance: none;
+  width: 100%;
+  height: 36px;
+  padding: 0 32px 0 10px;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-md);
+  cursor: pointer;
+  text-overflow: ellipsis;
+}
+.k-select select:hover {
+  border-color: var(--text-3);
+}
+.k-select select:focus-visible {
+  border-color: var(--primary);
+}
+.k-select__chevron {
+  position: absolute;
+  right: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+  color: var(--text-3);
+}
+
+/* ============================== Switch ============================== */
+
+.k-switch {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.k-switch.is-disabled {
+  opacity: 0.5;
+}
+.k-switch__track {
+  flex: none;
+  position: relative;
+  width: 36px;
+  height: 20px;
+  margin-top: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  transition: background var(--transition);
+}
+.k-switch__track.is-on {
+  background: var(--primary);
+}
+.k-switch__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform var(--transition);
+}
+.k-switch__track.is-on .k-switch__thumb {
+  transform: translateX(16px);
+}
+.k-switch__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  cursor: pointer;
+}
+.k-switch__label {
+  font-size: var(--fs-md);
+  font-weight: 500;
+}
+.k-switch__hint {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.35;
+}
+
+/* ============================== Badge =============================== */
+
+.k-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.k-badge--primary {
+  background: var(--primary-weak);
+  color: var(--primary);
+}
+.k-badge--accent {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+.k-badge--success {
+  background: var(--success-weak);
+  color: var(--success);
+}
+.k-badge--warning {
+  background: var(--warning-weak);
+  color: var(--warning);
+}
+.k-badge--danger {
+  background: var(--danger-weak);
+  color: var(--danger);
+}
+
+/* ============================= Section ============================== */
+
+.k-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.k-section + .k-section {
+  margin-top: 12px;
+}
+.k-section__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.k-section__titles {
+  min-width: 0;
+}
+.k-section__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-base);
+  font-weight: 650;
+}
+.k-section__step {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+}
+.k-section__subtitle {
+  margin-top: 3px;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+}
+.k-section__actions {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+
+/* ============================ Disclosure ============================ */
+
+.k-disclosure {
+  border-top: 1px solid var(--border);
+}
+.k-disclosure__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 11px 2px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text);
+}
+.k-disclosure__head:hover {
+  color: var(--primary);
+}
+.k-disclosure__chevron {
+  color: var(--text-3);
+  transition: transform var(--transition);
+}
+.k-disclosure.is-open .k-disclosure__chevron {
+  transform: rotate(90deg);
+}
+.k-disclosure__title {
+  flex: 1 1 auto;
+}
+.k-disclosure__right {
+  font-weight: 500;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+.k-disclosure__body {
+  padding: 0 2px 14px;
+}
+
+/* ============================== Callout ============================= */
+
+.k-callout {
+  display: flex;
+  gap: 8px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  background: var(--primary-weak);
+  color: var(--text);
+}
+.k-callout > svg {
+  margin-top: 1px;
+  color: var(--primary);
+}
+.k-callout--warning {
+  background: var(--warning-weak);
+}
+.k-callout--warning > svg {
+  color: var(--warning);
+}
+.k-callout--danger {
+  background: var(--danger-weak);
+}
+.k-callout--danger > svg {
+  color: var(--danger);
+}
+.k-callout--success {
+  background: var(--success-weak);
+}
+.k-callout--success > svg {
+  color: var(--success);
+}
+
+/* ============================= Swatches ============================= */
+
+.k-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.k-swatch {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+  color: var(--text-2);
+  background: var(--surface-2);
+}
+.k-swatch.is-active {
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 4px var(--primary);
+}
+.k-swatch--custom input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* ================================ KV ================================ */
+
+.k-kv {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: var(--fs-md);
+  color: var(--text-2);
+}
+.k-kv__v {
+  color: var(--text);
+  font-weight: 550;
+  text-align: right;
+}
+.k-kv--strong .k-kv__k {
+  color: var(--text);
+  font-weight: 600;
+}
+.k-kv--strong .k-kv__v {
+  font-weight: 700;
+}
+.k-kv__hint {
+  display: block;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+}
+
+/* ============================== Toasts ============================== */
+
+.k-toasts {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+}
+.k-toast {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: #1f2024;
+  color: #fff;
+  font-size: var(--fs-md);
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+  animation: k-toast-in 180ms ease-out;
+}
+.k-toast--success svg {
+  color: #4cc38a;
+}
+.k-toast--warning svg {
+  color: #f0b955;
+}
+@keyframes k-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (max-width: 760px) {
+  .k-toasts {
+    bottom: 84px;
+  }
+}
