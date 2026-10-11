@@ -7,7 +7,7 @@
  * Каждый кусок подписан на стор сам (булев селектор), поэтому при наведении
  * перерисовываются только два-три куска, а не вся схема.
  */
-import { memo, useMemo, useState, type FocusEvent, type PointerEvent } from "react";
+import { memo, useEffect, useMemo, useRef, useState, type FocusEvent, type PointerEvent } from "react";
 import type { CutBar, Piece } from "../domain/cutting";
 import type { ProductEstimate } from "../domain/estimate";
 import type { SkirtingSegment } from "../domain/skirtingCalc";
@@ -16,9 +16,11 @@ import { useAppStore } from "../state/store";
 import { Badge, Icon, useMediaQuery } from "../ui/kit";
 import {
   NBSP,
+  USEFUL_OFFCUT_CM,
   countText,
   describePiece,
   isMinimalCut,
+  isUsefulOffcut,
   meters,
   numberRanges,
   partText,
@@ -32,8 +34,6 @@ import {
   type SplitWalls,
 } from "./format";
 
-/** м: обрезок от этой длины «пригодится» (подойдёт на короткий участок). */
-export const USEFUL_OFFCUT = 0.3;
 /** Сколько оттенков для комнат (дальше — по кругу, а куски помечаются номером комнаты). */
 const ROOM_TINTS = 8;
 
@@ -125,7 +125,7 @@ function buildData(pe: ProductEstimate, showRoomNames: boolean, roomNumbers: Roo
     rooms,
     bySegment,
     segments,
-    usefulOffcuts: bars.filter((b) => b.waste >= USEFUL_OFFCUT - 1e-9).length,
+    usefulOffcuts: bars.filter((b) => isUsefulOffcut(b.waste)).length,
     multiRoom,
     unit: capitalize(unitForms(pe.product)[0]),
   };
@@ -276,7 +276,8 @@ const BarRow = memo(function BarRow({
   data: PlanData;
   stock: number;
 }) {
-  const useful = bar.waste >= USEFUL_OFFCUT - 1e-9;
+  // Пометка и подпись — из одного округления вниз: «0,29» без «пригодится», «0,30» — с ней.
+  const useful = isUsefulOffcut(bar.waste);
   return (
     <li className="rs-bar-row">
       <span className="rs-bar-row__no" aria-hidden>
@@ -312,42 +313,85 @@ function segmentName(s: SkirtingSegment, split: SplitWalls): string {
   return `стена ${s.wallLabel}, участок ${s.label.slice(s.wallLabel.length)}`;
 }
 
-const HoverInfo = memo(function HoverInfo({ data }: { data: PlanData }) {
-  const hoverId = useAppStore((s) => s.hoverSegmentId);
-  const activeRoomId = useAppStore((s) => s.activeRoomId);
-  const touch = useMediaQuery("(hover: none)");
+/** мс тишины, прежде чем скринридер прочитает подсказку (как сводка плана в plan/Overlays). */
+const ANNOUNCE_DELAY = 900;
+
+/**
+ * Скрытый live-регион: читает подсказку один раз, когда она перестала меняться. Видимая
+ * подсказка обновляется на каждом кадре перетаскивания стены (длина участка) и при каждом
+ * наведении — объявлять её сразу значило бы засыпать скринридер. При монтировании молчит.
+ */
+function HintAnnouncer({ text }: { text: string }) {
+  const [spoken, setSpoken] = useState("");
+  const last = useRef(text);
+  useEffect(() => {
+    if (text === last.current) return;
+    const t = window.setTimeout(() => {
+      last.current = text;
+      setSpoken(text);
+    }, ANNOUNCE_DELAY);
+    return () => window.clearTimeout(t);
+  }, [text]);
+  return (
+    <span className="visually-hidden" aria-live="polite">
+      {spoken}
+    </span>
+  );
+}
+
+interface HintParts {
+  head: string;
+  rest: string;
+  /** Подсказка «откройте комнату» — участок не из активной комнаты. */
+  elsewhere: string | null;
+}
+
+function hintParts(data: PlanData, hoverId: string | null, activeRoomId: string): HintParts | null {
   const info = hoverId ? data.segments.get(hoverId) : undefined;
   const refs = hoverId ? data.bySegment.get(hoverId) : undefined;
-  if (!info || !refs?.length) {
-    return (
-      <p className="rs-cut__hint">
-        <Icon name="info" size={14} />
-        {touch ? "Нажмите на кусок — он подсветится на плане" : "Наведите на кусок — он подсветится на плане и в 3D"}
-      </p>
-    );
-  }
+  if (!info || !refs?.length) return null;
   const s = info.segment;
   const room = data.rooms.get(s.roomId) ?? NO_ROOM;
   const parts = refs.map((r) => `${shortLen(r.piece.length)}${NBSP}м (${data.unit.toLowerCase()}${NBSP}${r.bar})`);
   const name = segmentName(s, room.split);
   const head = `${room.name ? `${room.name} · ` : ""}${name[0].toUpperCase()}${name.slice(1)} · ${meters(s.length)}`;
+  const rest =
+    refs.length === 1
+      ? ` — кусок ${parts[0]}`
+      : ` — ${refs.length} ${pluralize(refs.length, ["кусок", "куска", "кусков"])}: ${parts.join(" + ")}`;
   // На плане и в 3D — активная комната: участок другой комнаты там не подсветится, пока её не открыть.
-  const elsewhere = s.roomId !== activeRoomId;
+  const elsewhere =
+    s.roomId !== activeRoomId
+      ? `Эта комната сейчас не на плане — нажмите на кусок, чтобы открыть комнату «${info.roomName}».`
+      : null;
+  return { head, rest, elsewhere };
+}
+
+const HoverInfo = memo(function HoverInfo({ data }: { data: PlanData }) {
+  const hoverId = useAppStore((s) => s.hoverSegmentId);
+  const activeRoomId = useAppStore((s) => s.activeRoomId);
+  const touch = useMediaQuery("(hover: none)");
+  const hint = hintParts(data, hoverId, activeRoomId);
+  const spoken = hint ? `${hint.head}${hint.rest}.${hint.elsewhere ? ` ${hint.elsewhere}` : ""}` : "";
   return (
-    <p className="rs-cut__hint is-active" aria-live="polite">
-      <Icon name="skirting" size={14} />
-      <span>
-        <b>{head}</b>
-        {refs.length === 1
-          ? ` — кусок ${parts[0]}`
-          : ` — ${refs.length} ${pluralize(refs.length, ["кусок", "куска", "кусков"])}: ${parts.join(" + ")}`}
-        {elsewhere ? (
-          <span className="rs-cut__elsewhere">
-            Эта комната сейчас не на плане — нажмите на кусок, чтобы открыть комнату «{info.roomName}».
+    <>
+      {hint ? (
+        <p className="rs-cut__hint is-active">
+          <Icon name="skirting" size={14} />
+          <span>
+            <b>{hint.head}</b>
+            {hint.rest}
+            {hint.elsewhere ? <span className="rs-cut__elsewhere">{hint.elsewhere}</span> : null}
           </span>
-        ) : null}
-      </span>
-    </p>
+        </p>
+      ) : (
+        <p className="rs-cut__hint">
+          <Icon name="info" size={14} />
+          {touch ? "Нажмите на кусок — он подсветится на плане" : "Наведите на кусок — он подсветится на плане и в 3D"}
+        </p>
+      )}
+      <HintAnnouncer text={spoken} />
+    </>
   );
 });
 
@@ -457,7 +501,7 @@ export const CutPlan = memo(function CutPlan({
           <i className="rs-legend__sw rs-legend__sw--waste" /> обрезок
         </span>
         <span className="rs-legend__item">
-          <i className="rs-legend__sw rs-legend__sw--useful" /> пригодится (от {formatNumber(USEFUL_OFFCUT * 100, 0)} см)
+          <i className="rs-legend__sw rs-legend__sw--useful" /> пригодится (от {USEFUL_OFFCUT_CM}{NBSP}см)
         </span>
         {data.multiRoom
           ? estimate.rooms.map((r) => {

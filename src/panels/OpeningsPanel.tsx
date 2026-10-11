@@ -3,12 +3,13 @@
  * проёмов комнаты с влиянием на плинтус и инспектор выделенного проёма
  * (стандартные размеры, положение на стене, параметры вида).
  */
-import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, type ReactNode, type RefObject } from "react";
 import {
   CASING_INSET,
   DEFAULT_CASING,
   DOOR_FRAME,
   OPENING_KIND_META,
+  describeOpening,
   getPreset,
   getPresets,
   isFloorLevelWindow,
@@ -58,28 +59,6 @@ const KIND_TITLE: Record<OpeningKind, string> = {
   furniture: "Мебель — участок без плинтуса",
 };
 
-/** Короткое имя для строки списка: «Балкон 200×210 см» помещается рядом с бейджем. */
-const KIND_SHORT: Record<OpeningKind, string> = {
-  door: "Дверь",
-  window: "Окно",
-  passage: "Проём",
-  balcony: "Балкон",
-  furniture: "Мебель",
-};
-
-/** «Дверь 87×207 см», «Арка 90×210 см», «Кухня 240×90 см» */
-function openingTitle(o: Opening): string {
-  const name =
-    o.kind === "furniture"
-      ? o.label.trim() || KIND_SHORT.furniture
-      : o.kind === "passage" && o.arch
-        ? "Арка"
-        : KIND_SHORT[o.kind];
-  // Мебель — длина × глубина, как в итоге и предупреждениях (domain describeOpening).
-  if (o.kind === "furniture" && o.depth > 0) return `${name} ${sizeLabel(o.width, o.depth)}`;
-  return `${name} ${sizeLabel(o.width, o.height)}`;
-}
-
 /** «Не хватает места для …» */
 const KIND_GENITIVE: Record<OpeningKind, string> = {
   door: "двери",
@@ -114,17 +93,51 @@ interface Impact {
   deduct: number;
   /** м, добавлено на откосы. */
   reveal: number;
+  /** м, из deduct — боковина мебели в углу на соседней стене. */
+  side: number;
+  /** Стена(ы) под боковиной: «B», «B, C». */
+  sideWalls: string;
+}
+
+const NO_IMPACT: Impact = { deduct: 0, reveal: 0, side: 0, sideWalls: "" };
+
+/** «на стене B за боковиной», «на стенах A и C за боковинами» (мебель на всю стену). */
+function sideWhere(walls: string): string {
+  const list = walls.split(/,\s*/).filter(Boolean);
+  if (list.length <= 1) return `на стене ${walls} за боковиной`;
+  const names = `${list.slice(0, -1).join(", ")} и ${list[list.length - 1]}`;
+  return `на стенах ${names} за боковинами`;
+}
+
+/**
+ * Боковина мебели в углу — в подписи вычета домена (skirtingCalc):
+ * «Кухня 240×60 см и боковина 60 см на стене B». Отдельного поля у вычета нет,
+ * поэтому читаем подпись; не нашли — показываем общую формулировку.
+ */
+const SIDE_RE = /\sи боковина ([\d\s\u00a0\u202f]+(?:,\d+)?) см на стене (.+)$/;
+
+function parseSide(label: string): { side: number; walls: string } | null {
+  const m = SIDE_RE.exec(label);
+  if (!m) return null;
+  const side = Number(m[1].replace(/[\s\u00a0\u202f]/g, "").replace(",", ".")) / 100;
+  return Number.isFinite(side) && side > 0 ? { side, walls: m[2] } : null;
 }
 
 function impactsOf(result: RoomSkirtingResult | undefined): Map<string, Impact> {
   const map = new Map<string, Impact>();
   if (!result) return map;
   for (const d of result.deductions) {
-    const cur = map.get(d.openingId) ?? { deduct: 0, reveal: 0 };
-    map.set(d.openingId, { ...cur, deduct: cur.deduct + d.length });
+    const cur = map.get(d.openingId) ?? NO_IMPACT;
+    const side = d.kind === "furniture" ? parseSide(d.label) : null;
+    map.set(d.openingId, {
+      ...cur,
+      deduct: cur.deduct + d.length,
+      side: cur.side + (side?.side ?? 0),
+      sideWalls: side?.walls ?? cur.sideWalls,
+    });
   }
   for (const r of result.reveals) {
-    const cur = map.get(r.openingId) ?? { deduct: 0, reveal: 0 };
+    const cur = map.get(r.openingId) ?? NO_IMPACT;
     map.set(r.openingId, { ...cur, reveal: cur.reveal + r.length });
   }
   return map;
@@ -149,9 +162,36 @@ export function OpeningsPanel() {
   const targetWall = selectedWallId ? wallById.get(selectedWallId) ?? null : null;
   const counted = room.skirtingEnabled && !!result;
 
+  const listRef = useRef<HTMLDivElement>(null);
+  const addRef = useRef<HTMLDivElement>(null);
+  const sortedRef = useRef(sorted);
+  sortedRef.current = sorted;
+
+  /**
+   * Удаление из карточки: кнопка исчезает вместе с карточкой, и фокус ушёл бы
+   * на <body>. Переводим его на следующий проём списка (или предыдущий), а
+   * если список опустел — на первую кнопку добавления («Дверь»).
+   */
+  const removeOpening = useCallback((id: string) => {
+    const list = sortedRef.current;
+    const i = list.findIndex((o) => o.id === id);
+    const neighbor = i >= 0 ? list[i + 1] ?? list[i - 1] ?? null : null;
+    useAppStore.getState().removeOpening(id);
+    notify("Проём удалён — можно отменить", "info");
+    requestAnimationFrame(() => {
+      const head = neighbor
+        ? listRef.current?.querySelector<HTMLElement>(`[data-opening-id="${CSS.escape(neighbor.id)}"] .pn-op__head`)
+        : null;
+      const target = head ?? addRef.current?.querySelector<HTMLElement>("button");
+      target?.focus({ preventScroll: true });
+      target?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
+    });
+  }, []);
+
   return (
     <div className="pn">
       <AddSection
+        gridRef={addRef}
         targetWallId={targetWall?.id ?? null}
         targetLabel={targetWall?.label ?? ""}
         targetLength={targetWall?.length ?? 0}
@@ -184,19 +224,25 @@ export function OpeningsPanel() {
         {sorted.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="pn-oplist" role="list" aria-label="Проёмы комнаты">
-            {sorted.map((o) => (
-              <OpeningItem
-                key={o.id}
-                opening={o}
-                wallLabel={wallById.get(o.wallId)?.label ?? ""}
-                deduct={impacts.get(o.id)?.deduct ?? 0}
-                reveal={impacts.get(o.id)?.reveal ?? 0}
-                counted={counted}
-                selected={o.id === selectedOpeningId}
-                roomId={room.id}
-              />
-            ))}
+          <div ref={listRef} className="pn-oplist" role="list" aria-label="Проёмы комнаты">
+            {sorted.map((o) => {
+              const im = impacts.get(o.id) ?? NO_IMPACT;
+              return (
+                <OpeningItem
+                  key={o.id}
+                  opening={o}
+                  wallLabel={wallById.get(o.wallId)?.label ?? ""}
+                  deduct={im.deduct}
+                  reveal={im.reveal}
+                  side={im.side}
+                  sideWalls={im.sideWalls}
+                  counted={counted}
+                  selected={o.id === selectedOpeningId}
+                  roomId={room.id}
+                  onRemove={removeOpening}
+                />
+              );
+            })}
           </div>
         )}
       </Section>
@@ -207,10 +253,13 @@ export function OpeningsPanel() {
 /* --------------------------- Добавление --------------------------- */
 
 const AddSection = memo(function AddSection({
+  gridRef,
   targetWallId,
   targetLabel,
   targetLength,
 }: {
+  /** Сетка кнопок добавления — сюда уходит фокус, когда удалён последний проём. */
+  gridRef: RefObject<HTMLDivElement>;
   targetWallId: string | null;
   targetLabel: string;
   targetLength: number;
@@ -231,7 +280,7 @@ const AddSection = memo(function AddSection({
 
   return (
     <Section step={2} title="Проёмы" subtitle="Двери, окна и мебель — плинтус учтёт их сам">
-      <div className="pn-addgrid">
+      <div ref={gridRef} className="pn-addgrid">
         {KIND_ORDER.map((k) => (
           <button
             key={k}
@@ -296,9 +345,12 @@ interface ItemProps {
   wallLabel: string;
   deduct: number;
   reveal: number;
+  side: number;
+  sideWalls: string;
   counted: boolean;
   selected: boolean;
   roomId: string;
+  onRemove: (id: string) => void;
 }
 
 const OpeningItem = memo(function OpeningItem({
@@ -306,9 +358,12 @@ const OpeningItem = memo(function OpeningItem({
   wallLabel,
   deduct,
   reveal,
+  side,
+  sideWalls,
   counted,
   selected,
   roomId,
+  onRemove,
 }: ItemProps) {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -321,16 +376,20 @@ const OpeningItem = memo(function OpeningItem({
     useAppStore.getState().select(selected ? null : { type: "opening", roomId, openingId: o.id });
 
   const preset = getPreset(o.presetId);
-  const title = openingTitle(o);
+  // Та же подпись, что в итоге, на плане и в 3D: «Дверь 80 (проём 87×207 см)», «Кухня 240×60 см».
+  const title = describeOpening(o);
+  // Название пресета — если подпись его ещё не называет (у дверей магазинное имя уже в ней).
+  const presetName = preset && !(o.kind === "door" && preset.label) ? preset.name : null;
+  const impact: Impact = { deduct, reveal, side, sideWalls };
 
   return (
-    <div ref={ref} role="listitem" className={`pn-op${selected ? " is-open" : ""}`}>
+    <div ref={ref} role="listitem" data-opening-id={o.id} className={`pn-op${selected ? " is-open" : ""}`}>
       <button
         type="button"
         className="pn-op__head"
         aria-expanded={selected}
         onClick={toggle}
-        title={preset ? `${title} · ${preset.name}` : title}
+        title={presetName ? `${title} · ${presetName}` : title}
       >
         <span className={`pn-op__icon pn-kind--${o.kind}`}>
           <Icon name={KIND_ICON[o.kind]} size={18} />
@@ -341,20 +400,19 @@ const OpeningItem = memo(function OpeningItem({
             <span className="pn-op__sub">
               {wallLabel ? `Стена ${wallLabel}` : "Стена не найдена"}
               {/* Название пресета — только если хватает ширины (см. panels.css), без обрезки. */}
-              {preset ? <span className="pn-op__preset"> · {preset.name}</span> : null}
+              {presetName ? <span className="pn-op__preset"> · {presetName}</span> : null}
             </span>
-            {counted ? <ImpactBadges deduct={deduct} reveal={reveal} /> : null}
+            {counted ? <ImpactBadges impact={impact} furniture={o.kind === "furniture"} /> : null}
           </span>
         </span>
         <Icon name="chevron-down" size={16} className="pn-op__chevron" />
       </button>
-      {selected ? <OpeningInspector opening={o} deduct={deduct} reveal={reveal} counted={counted} /> : null}
+      {selected ? <OpeningInspector opening={o} impact={impact} counted={counted} onRemove={onRemove} /> : null}
     </div>
   );
 });
 
-function ImpactBadges({ deduct, reveal }: { deduct: number; reveal: number }) {
-  const impact: Impact = { deduct, reveal };
+function ImpactBadges({ impact, furniture }: { impact: Impact; furniture: boolean }) {
   if (impact.deduct < 0.0005 && impact.reveal < 0.0005) {
     return (
       <span className="pn-op__impact">
@@ -362,10 +420,15 @@ function ImpactBadges({ deduct, reveal }: { deduct: number; reveal: number }) {
       </span>
     );
   }
+  const deductTitle = furniture
+    ? impact.side >= 0.0005
+      ? `Без плинтуса ${meters(impact.deduct)}: вдоль мебели и ${sideWhere(impact.sideWalls)}`
+      : `Без плинтуса ${meters(impact.deduct)} — вдоль мебели`
+    : `Плинтус прерывается: −${meters(impact.deduct)} плинтуса`;
   return (
     <span className="pn-op__impact">
       {impact.deduct >= 0.0005 ? (
-        <Badge tone="accent" title={`Плинтус прерывается: −${meters(impact.deduct)} плинтуса`}>
+        <Badge tone="accent" title={deductTitle}>
           −{meters(impact.deduct)}
         </Badge>
       ) : null}
@@ -382,20 +445,19 @@ function ImpactBadges({ deduct, reveal }: { deduct: number; reveal: number }) {
 
 function OpeningInspector({
   opening: o,
-  deduct,
-  reveal,
+  impact,
   counted,
+  onRemove,
 }: {
   opening: Opening;
-  deduct: number;
-  reveal: number;
+  impact: Impact;
   counted: boolean;
+  onRemove: (id: string) => void;
 }) {
   const walls = useWalls();
   const wall = walls.find((w) => w.id === o.wallId);
   const roomHeight = useAppStore((s) => (s.project.rooms.find((r) => r.id === s.activeRoomId) ?? s.project.rooms[0]).height);
   const skirtingHeight = useRoomProduct().height;
-  const impact: Impact = { deduct, reveal };
   const id = o.id;
   const update = (patch: Partial<Opening>) => useAppStore.getState().updateOpening(id, patch);
   const L = wall?.length ?? o.offset + o.width;
@@ -420,10 +482,7 @@ function OpeningInspector({
     useAppStore.getState().duplicateOpening(id);
     if (getActiveRoom() === before) notify("Для копии не нашлось свободного места", "warning");
   };
-  const remove = () => {
-    useAppStore.getState().removeOpening(id);
-    notify("Проём удалён — можно отменить", "info");
-  };
+  const remove = () => onRemove(id);
 
   const isFurniture = o.kind === "furniture";
   const isWindow = o.kind === "window";
@@ -717,7 +776,10 @@ function KindOptions({
               onChange={(v) => update({ depth: v })}
             />
           </div>
-          <p className="pn-note">Вдоль мебели плинтус не нужен — например, у кухни свой цоколь.</p>
+          <p className="pn-note">
+            Вдоль мебели плинтус не нужен — например, у кухни свой цоколь. Если мебель стоит вплотную к углу,
+            плинтус не нужен и за её боковиной — на глубину корпуса.
+          </p>
         </div>
       );
     case "window":
@@ -782,6 +844,8 @@ function ImpactLine({
   skirtingHeight: number;
 }) {
   let text: string;
+  /** Вторая строка — из чего сложился вычет. */
+  let detail: string | null = null;
   let tone: "neutral" | "accent" = "accent";
   if (!counted) {
     text = "Комната не учитывается в расчёте плинтуса";
@@ -799,7 +863,15 @@ function ImpactLine({
     const len = cm(impact.deduct);
     switch (o.kind) {
       case "furniture":
-        text = `Без плинтуса на ${len} — вдоль мебели`;
+        if (impact.side >= 0.0005) {
+          // Мебель вплотную к углу: её боковина закрывает соседнюю стену на глубину корпуса.
+          const along = Math.max(0, impact.deduct - impact.side);
+          const both = impact.sideWalls.includes(",");
+          text = `Без плинтуса ${len} — мебель стоит ${both ? "от угла до угла" : "в углу"}`;
+          detail = `${cm(along)} вдоль мебели и ${cm(impact.side)} ${sideWhere(impact.sideWalls)}`;
+        } else {
+          text = `Без плинтуса ${len} — вдоль мебели`;
+        }
         break;
       case "balcony":
         text =
@@ -818,7 +890,10 @@ function ImpactLine({
   return (
     <div className={`pn-impact pn-impact--${tone}`}>
       <Icon name={tone === "accent" ? "skirting" : "check"} size={16} />
-      <span>{text}</span>
+      <span className="pn-impact__text">
+        <span>{text}</span>
+        {detail ? <span className="pn-impact__detail">{detail}</span> : null}
+      </span>
     </div>
   );
 }

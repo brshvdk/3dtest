@@ -3,7 +3,7 @@
  * Всё — простым языком и с числами, чтобы пользователь мог проверить расчёт.
  */
 import { memo, useMemo, type ReactNode } from "react";
-import { FASTENER_RESERVE, type ProductEstimate, type ProjectEstimate } from "../domain/estimate";
+import type { ProductEstimate, ProjectEstimate } from "../domain/estimate";
 import { wallLabel } from "../domain/geometry";
 import { affectsSkirting, describeOpening } from "../domain/openings";
 import { computeProjectMetrics } from "../domain/roomMetrics";
@@ -13,8 +13,8 @@ import { formatArea, formatLength, formatNumber, formatVolume, pluralize } from 
 import { getRoomMetrics } from "../state/hooks";
 import { useAppStore } from "../state/store";
 import { Disclosure, Icon, KV } from "../ui/kit";
-import { USEFUL_OFFCUT } from "./CutPlan";
-import { NBSP, countText, joinRu, meters, pctText, stockText, unitWords } from "./format";
+import { accessoryRows } from "./accessoryText";
+import { NBSP, countText, isUsefulOffcut, joinRu, meters, pctText, stockText, unitWords } from "./format";
 
 /* --------------------------- Как мы посчитали --------------------------- */
 
@@ -154,7 +154,7 @@ function ProductCalc({
   const roundedUp = Math.abs(ratio - Math.round(ratio)) > 1e-6;
 
   // Обрезки, из которых вышел бы целый кусок: значит, лишние планки — от того, как нарезаны стены.
-  const longOffcuts = pe.cutPlan.bars.filter((b) => b.waste >= Math.max(minPiece, USEFUL_OFFCUT) - 1e-9).length;
+  const longOffcuts = pe.cutPlan.bars.filter((b) => isUsefulOffcut(b.waste) && b.waste >= minPiece - 1e-6).length;
 
   let cutText: ReactNode;
   if (pe.planksMin > naive && p.material === "ceramic") {
@@ -309,90 +309,13 @@ export const CalcDetails = memo(function CalcDetails({
 /* ------------------------- Углы, стыки, крепёж ------------------------- */
 
 function AccessoryRows({ pe }: { pe: ProductEstimate }) {
-  const p = pe.product;
-  const acc = pe.accessories;
-  const fittings = p.cornerMethod === "fittings";
-  // У ПВХ с кабель-каналом заглушки и соединители остаются и при запиле (см. domain/estimate).
-  const endFittings = fittings || p.cableChannel;
-  const sum = (f: (r: RoomSkirtingResult) => number) => pe.rooms.reduce((s, r) => s + f(r), 0);
-  const inner = sum((r) => r.corners.inner);
-  const outer = sum((r) => r.corners.outer);
-  const nonRight = sum((r) => r.corners.nonRight);
-  const left = sum((r) => r.endCaps.left);
-  const right = sum((r) => r.endCaps.right);
-  const ends = left + right;
-  const pcs = (n: number) => `${formatNumber(n, 0)} шт`;
-  const words = unitWords(p);
-  const step = formatLength(p.fastenerStep, "cm");
-  const reserve = `+${pctText(FASTENER_RESERVE * 100, 0)} запас`;
-
-  if (pe.netLength <= 0) return <p className="rs-empty-line">Плинтус не нужен — фурнитура и крепёж тоже.</p>;
-
+  const rows = accessoryRows(pe);
+  if (!rows.length) return <p className="rs-empty-line">Плинтус не нужен — фурнитура и крепёж тоже.</p>;
   return (
     <div className="rs-acc">
-      <KV
-        k="Внутренние углы"
-        hint={fittings ? "по уголку на каждый угол комнаты" : "запил 45° — уголки не нужны"}
-        v={pcs(inner)}
-      />
-      {outer > 0 ? (
-        <KV
-          k="Наружные углы"
-          hint={
-            fittings
-              ? "выступы стен, короба, откосы проёмов"
-              : "запил 45°: кусок берём длиннее на толщину плинтуса"
-          }
-          v={pcs(outer)}
-        />
-      ) : null}
-      {nonRight > 0 ? (
-        <KV k="Из них не 90°" hint={fittings ? "нужен гибкий (регулируемый) угол" : "запил под половину угла"} v={pcs(nonRight)} />
-      ) : null}
-      <KV
-        k={endFittings ? "Заглушки" : "Торцы"}
-        hint={
-          ends === 0
-            ? "плинтус идёт кольцом без разрывов"
-            : endFittings
-              ? p.handedEndCaps
-                ? `у дверей и проёмов: ${left} ${pluralize(left, ["левая", "левые", "левых"])} и ${right} ${pluralize(right, ["правая", "правые", "правых"])}`
-                : "у дверей и проёмов — по заглушке на каждый конец"
-              : "у дверей и проёмов: торец подрезается к наличнику"
-        }
-        v={pcs(ends)}
-      />
-      <KV
-        k={`Стыки ${words.genPl}`}
-        hint={
-          pe.joints === 0
-            ? "все стены короче планки — стыков нет"
-            : endFittings
-              ? `стены длиннее ${stockText(p.length)} — по соединителю на стык`
-              : p.material === "ceramic"
-                ? `стены длиннее ${stockText(p.length)} — элементы кладутся встык со швом`
-                : `стены длиннее ${stockText(p.length)} — стык встык или на ус (45°)`
-        }
-        v={pcs(pe.joints)}
-      />
-      {p.fastening === "dowels" || p.fastening === "nails" || p.fastening === "clips" ? (
-        <KV k={p.fastenerName} hint={`через ${step}, по краям каждого участка и у каждого стыка, ${reserve}`} v={pcs(acc.fasteners)} />
-      ) : null}
-      {p.fastening === "clips" ? <KV k="Дюбели для клипс" hint="по одному на клипсу" v={pcs(acc.dowels)} /> : null}
-      {p.fastening === "glue" ? (
-        <KV
-          k={p.fastenerName}
-          hint={`≈ ${formatNumber(p.glueRate, 1, { trim: true })} пог. м на тубу: ${formatNumber(pe.netLength, 2)} ÷ ${formatNumber(p.glueRate, 1, { trim: true })} → вверх`}
-          v={`${formatNumber(acc.glue, 0)} туб`}
-        />
-      ) : null}
-      {p.fastening === "adhesive" ? (
-        <KV
-          k={p.fastenerName}
-          hint={`≈ ${formatNumber(p.glueRate, 2, { trim: true })} кг на пог. м: ${formatNumber(pe.netLength, 2)} × ${formatNumber(p.glueRate, 2, { trim: true })} → вверх`}
-          v={`${formatNumber(acc.glue, 0)} кг`}
-        />
-      ) : null}
+      {rows.map((r) => (
+        <KV key={r.id} k={r.k} hint={r.hint} v={r.v} />
+      ))}
     </div>
   );
 }

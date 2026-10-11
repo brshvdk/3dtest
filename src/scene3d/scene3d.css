@@ -105,12 +105,39 @@
   padding: 0;
 }
 
-/* Средняя ширина: режимы стен — только иконки. */
-@container s3d (max-width: 780px) {
-  .s3d-tbtn__text--mode {
+/* Средняя ширина: подписи режимов стен в строку не помещаются — короткая
+   подпись под иконкой (кнопки чуть выше); тесно и так — у ракурсов короткие
+   подписи; совсем тесно — у режимов одни иконки. Ярус выбирает Toolbar по
+   факту переполнения (data-fit); на узком виде (≤ 560 px) — свой компактный
+   вид ниже. */
+@container s3d (width > 560px) {
+  .s3d-toolbar[data-fit^="stack"] .s3d-tbtn {
+    height: 38px;
+  }
+  .s3d-toolbar[data-fit^="stack"] .s3d-tbtn--icon {
+    width: 38px;
+  }
+  .s3d-toolbar[data-fit^="stack"] .s3d-tbtn--mode {
+    flex-direction: column;
+    gap: 3px;
+    min-width: 42px;
+    padding: 0 6px;
+  }
+  .s3d-toolbar[data-fit^="stack"] .s3d-tbtn__text--mode,
+  .s3d-toolbar[data-fit="icons"] .s3d-tbtn__text--mode,
+  .s3d-toolbar[data-fit="stack-short"] .s3d-tbtn--view .s3d-tbtn__text {
     display: none;
   }
-  .s3d-tbtn--mode {
+  .s3d-toolbar[data-fit^="stack"] .s3d-tbtn--mode .s3d-tbtn__short {
+    display: block;
+    font-size: 10.5px;
+    font-weight: 550;
+    line-height: 1;
+  }
+  .s3d-toolbar[data-fit="stack-short"] .s3d-tbtn--view .s3d-tbtn__short {
+    display: inline;
+  }
+  .s3d-toolbar[data-fit="icons"] .s3d-tbtn--mode {
     width: 34px;
     padding: 0;
   }
@@ -193,7 +220,8 @@
   animation: s3d-flash 1600ms ease both;
 }
 /* На широком виде у ракурсов и режимов стен есть подписи — дублировать не нужно
-   (aria-live всё равно прочитает текст: он скрыт только визуально). */
+   (aria-live всё равно прочитает текст: он скрыт только визуально). Режимы
+   стен без подписи в строку (data-tbfit ставит Toolbar) — подпись показываем. */
 .s3d-flash--view,
 .s3d-flash--walls {
   position: absolute;
@@ -202,7 +230,16 @@
   overflow: hidden;
   clip-path: inset(50%);
 }
-@container s3d (max-width: 780px) {
+.s3d[data-tbfit^="stack"] .s3d-flash--walls,
+.s3d[data-tbfit="icons"] .s3d-flash--walls,
+.s3d[data-tbfit="stack-short"] .s3d-flash--view {
+  position: static;
+  width: auto;
+  height: auto;
+  overflow: hidden;
+  clip-path: none;
+}
+@container s3d (max-width: 560px) {
   .s3d-flash--walls {
     position: static;
     width: auto;
@@ -211,8 +248,13 @@
     clip-path: none;
   }
 }
+/* Панель с подписями под иконками выше — подпись поднимаем над ней. */
+.s3d[data-tbfit^="stack"] .s3d-flash-host {
+  bottom: 70px;
+}
 @container s3d (max-width: 560px) {
-  .s3d-flash-host {
+  .s3d-flash-host,
+  .s3d[data-tbfit^="stack"] .s3d-flash-host {
     bottom: 70px;
   }
   .s3d-flash--view {
@@ -452,6 +494,18 @@
 }
 .s3d-wall-label.is-off {
   visibility: hidden;
+}
+/* Стену подсвечивают из панелей (наведение на поле стены): как выделение, но тише. */
+.s3d-wall-label.is-hover,
+.s3d-wall-label.is-hover.is-far {
+  background: var(--surface);
+  border-color: var(--primary);
+  box-shadow: var(--shadow-sm);
+  color: var(--primary);
+}
+.s3d-wall-label.is-hover b,
+.s3d-wall-label.is-hover .s3d-wall-label__dot {
+  color: inherit;
 }
 .s3d-wall-label.is-selected {
   opacity: 1;

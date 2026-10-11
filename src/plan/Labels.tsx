@@ -13,7 +13,7 @@ import { formatLength, formatNumber, fromMeters, parseLength, roundTo, type Leng
 import { useAppStore } from "../state/store";
 import { toast } from "../ui/kit";
 import { onWall, uprightAngle, type SkirtLine } from "./geom";
-import { keepFocusInPlan, selectOnPlan, usePlanUi } from "./planUi";
+import { keepFocusInPlan, notePlanEdit, selectOnPlan, usePlanUi } from "./planUi";
 
 const activeRoom = (): Room => {
   const s = useAppStore.getState();
@@ -312,6 +312,8 @@ export const WallLabels = memo(function WallLabels({
   );
   const editing = usePlanUi((u) => u.editing);
   const hoverWallId = usePlanUi((u) => (u.hover?.type === "wall" ? u.hover.id : null));
+  // Наведение на строку стены в боковой панели — та же подсветка, что и на плане.
+  const panelHoverWallId = useAppStore((st) => st.hoverWallId);
   const dragWallId = usePlanUi((u) => (u.drag?.kind === "wall" ? u.drag.wallId : null));
   const dragPointId = usePlanUi((u) => (u.drag?.kind === "point" ? u.drag.pointId : null));
   const live = liveWalls(walls, room, dragWallId, dragPointId);
@@ -319,7 +321,8 @@ export const WallLabels = memo(function WallLabels({
   const commit = (w: Wall, v: number) => {
     const before = activeRoom();
     useAppStore.getState().setWallLength(w.id, v);
-    if (activeRoom() === before) {
+    if (activeRoom() !== before) notePlanEdit();
+    else {
       toast(
         v < MIN_WALL || v > MAX_ROOM_EXTENT
           ? `Длина стены — от ${formatLength(MIN_WALL)} до ${formatLength(MAX_ROOM_EXTENT, "m", 0)}`
@@ -360,7 +363,7 @@ export const WallLabels = memo(function WallLabels({
             </div>
           );
         }
-        const tone = live.has(w.id) ? " is-live" : w.id === selWallId || w.id === dragWallId ? " is-sel" : w.id === hoverWallId ? " is-hover" : "";
+        const tone = live.has(w.id) ? " is-live" : w.id === selWallId || w.id === dragWallId ? " is-sel" : w.id === hoverWallId || w.id === panelHoverWallId ? " is-hover" : "";
         return (
           // Нажатие ловим на обёртке: тач-коррекция браузера может отдать click ей, а не кнопке.
           <div
@@ -543,7 +546,9 @@ export const OpeningDimChips = memo(function OpeningDimChips({
                     toast("Проём не поместится — столько места на стене нет", "warning");
                     return;
                   }
+                  const before = activeRoom();
                   useAppStore.getState().moveOpening(o.id, w.id, Math.max(0, off));
+                  if (activeRoom() !== before) notePlanEdit();
                 }}
               />
             </div>

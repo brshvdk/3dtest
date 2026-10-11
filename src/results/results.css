@@ -65,9 +65,12 @@
   font-size: inherit;
   cursor: pointer;
 }
-.rs-link:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
+/* Эффекты наведения — только там, где есть мышь: на телефоне :hover «залипает» после касания. */
+@media (hover: hover) {
+  .rs-link:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
 }
 /* На сенсорных экранах — область нажатия больше самого текста (раскладку не меняет). */
 @media (pointer: coarse) {
@@ -352,7 +355,8 @@
   margin-bottom: 4px;
   border-radius: 50%;
   background: var(--accent-weak);
-  color: var(--accent);
+  /* Иконка на светлой подложке: --accent даёт 2,8:1, --accent-text — 4,9:1 (в тёмной теме они совпадают). */
+  color: var(--accent-text);
 }
 .rs-empty__title {
   font-size: var(--fs-lg);
@@ -796,9 +800,11 @@
   --rs-bg: var(--rs-tint-7);
   --rs-line: var(--rs-tint-7-line);
 }
-.rs-chip:hover,
-.rs-pc:hover {
-  border-color: var(--accent);
+@media (hover: hover) {
+  .rs-chip:hover,
+  .rs-pc:hover {
+    border-color: var(--accent);
+  }
 }
 .rs-chip.is-hot,
 .rs-pc.is-hot {
@@ -1025,8 +1031,10 @@
   font-size: var(--fs-sm);
   font-weight: 600;
 }
-.rs-more:hover {
-  background: var(--primary-weak);
+@media (hover: hover) {
+  .rs-more:hover {
+    background: var(--primary-weak);
+  }
 }
 
 .rs-cut__hint {
@@ -1049,7 +1057,7 @@
   color: var(--text);
 }
 .rs-cut__hint.is-active > svg {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 .rs-cut__hint b {
   font-weight: 650;
@@ -1113,13 +1121,6 @@
   font-size: var(--fs-xs);
 }
 
-@media (hover: none) {
-  .rs-chip:hover,
-  .rs-pc:hover {
-    border-color: var(--rs-line);
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .rs-hero__num {
     animation: none;
@@ -1152,7 +1153,6 @@
   --rs-rule: #c9c9ce;
   --rs-rule-2: #e3e3e6;
   --rs-fill: #f3f3f4;
-  --rs-accent: #d65a10;
   color: var(--rs-ink);
   background: #fff;
   font-family: var(--font);
@@ -1298,10 +1298,19 @@
   font-size: 10px;
   color: var(--rs-ink-3);
 }
+/* Заголовок группы не остаётся последней строкой страницы. */
+.rs-sheet__group {
+  break-after: avoid;
+}
 .rs-sheet__group td {
   padding-top: 8px;
   font-weight: 700;
   background: var(--rs-fill);
+}
+/* «Итого» — один раз, в конце таблицы: tfoot по умолчанию повторяется внизу каждой страницы,
+   и на первой странице длинного списка выглядел бы как итог её части. Шапка (thead) повторяется. */
+.rs-sheet__table tfoot {
+  display: table-row-group;
 }
 .rs-sheet__table tfoot td {
   padding-top: 7px;

@@ -5,6 +5,7 @@
  */
 import { windowSashCount } from "../../domain/openings";
 import type { Opening } from "../../domain/types";
+import { FREE_SIDES, clipExtent, type OpeningSides } from "../build/sides";
 import type { Palette } from "../materials";
 import { Box } from "./Box";
 
@@ -13,6 +14,9 @@ const FW = 0.06;
 const FD = 0.07;
 /** Ширина профиля створки, м. */
 const SW = 0.055;
+/** Подоконник: выступ за откосы с каждой стороны и вынос в комнату, м. */
+const SILL_EXT = 0.05;
+const SILL_OUT = 0.065;
 
 /** Глубина плоскости окна от внутренней грани (окно ближе к улице). */
 export function windowDepth(th: number): number {
@@ -78,6 +82,8 @@ export function WindowUnit({
   th,
   door,
   sill,
+  sillLeft = SILL_EXT,
+  sillRight = SILL_EXT,
   p,
 }: {
   x0: number;
@@ -89,6 +95,9 @@ export function WindowUnit({
   door?: boolean;
   /** Подоконник и отлив (окно не в пол). */
   sill: boolean;
+  /** Выступ подоконника за x0 / x1 (у угла комнаты — меньше), м. */
+  sillLeft?: number;
+  sillRight?: number;
   p: Palette;
 }) {
   const zc = windowDepth(th);
@@ -123,7 +132,7 @@ export function WindowUnit({
       {sashes}
       {sill ? (
         <>
-          <Box b={[x0 - 0.05, x1 + 0.05, y0 - 0.022, y0 + 0.004, z1 - 0.004, 0.065]} m={p.sill} />
+          <Box b={[x0 - sillLeft, x1 + sillRight, y0 - 0.022, y0 + 0.004, z1 - 0.004, SILL_OUT]} m={p.sill} />
           <Box b={[x0 - 0.02, x1 + 0.02, y0 - 0.014, y0 - 0.004, -th - 0.05, z0]} m={p.metal} />
         </>
       ) : null}
@@ -131,14 +140,54 @@ export function WindowUnit({
   );
 }
 
-export function WindowModel({ o, th, p, cut }: { o: Opening; th: number; p: Palette; cut: number }) {
+/** Подоконник у угла комнаты подрезан по соседней стене. */
+function sillSpan(sides: OpeningSides): { left: number; right: number } {
+  return { left: clipExtent(SILL_EXT, sides.left, SILL_OUT), right: clipExtent(SILL_EXT, sides.right, SILL_OUT) };
+}
+
+export function WindowModel({
+  o,
+  th,
+  p,
+  cut,
+  sides = FREE_SIDES,
+}: {
+  o: Opening;
+  th: number;
+  p: Palette;
+  cut: number;
+  sides?: OpeningSides;
+}) {
   if (o.elevation >= cut) return null;
+  const s = sillSpan(sides);
   return (
-    <WindowUnit x0={0} x1={o.width} y0={o.elevation} y1={o.elevation + o.height} th={th} sill={o.elevation > 0.05} p={p} />
+    <WindowUnit
+      x0={0}
+      x1={o.width}
+      y0={o.elevation}
+      y1={o.elevation + o.height}
+      th={th}
+      sill={o.elevation > 0.05}
+      sillLeft={s.left}
+      sillRight={s.right}
+      p={p}
+    />
   );
 }
 
-export function BalconyModel({ o, th, p, cut }: { o: Opening; th: number; p: Palette; cut: number }) {
+export function BalconyModel({
+  o,
+  th,
+  p,
+  cut,
+  sides = FREE_SIDES,
+}: {
+  o: Opening;
+  th: number;
+  p: Palette;
+  cut: number;
+  sides?: OpeningSides;
+}) {
   const W = o.width;
   const H = o.height;
   const dw = Math.max(0, Math.min(o.balconyDoorWidth, W));
@@ -152,7 +201,17 @@ export function BalconyModel({ o, th, p, cut }: { o: Opening; th: number; p: Pal
     <group>
       {dw > 0.2 ? <WindowUnit x0={d0} x1={d1} y0={0} y1={H} th={th} door sill={false} p={p} /> : null}
       {w1 - w0 > 0.2 && sill < cut ? (
-        <WindowUnit x0={w0} x1={w1} y0={sill} y1={H} th={th} sill={sill > 0.05} p={p} />
+        <WindowUnit
+          x0={w0}
+          x1={w1}
+          y0={sill}
+          y1={H}
+          th={th}
+          sill={sill > 0.05}
+          sillLeft={left ? undefined : sillSpan(sides).left}
+          sillRight={left ? sillSpan(sides).right : undefined}
+          p={p}
+        />
       ) : null}
     </group>
   );

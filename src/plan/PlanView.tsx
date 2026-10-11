@@ -29,8 +29,8 @@ import { ContextPanel } from "./ContextPanel";
 import { roomBounds, skirtingLines, wallCuts, wallPieces } from "./geom";
 import { AngleChip, KeyHandles, layoutWallLabels, OpeningDimChips, SegmentTip, WallLabels } from "./Labels";
 import { SelectionLayer, SkirtHoverLayer, WallDims } from "./Layers";
-import { Hint, ScaleBar, Summary, useHintHidden, ZoomControls } from "./Overlays";
-import { usePlanUi } from "./planUi";
+import { Hint, ScaleBar, Summary, ZoomControls, type HintMode } from "./Overlays";
+import { notePlanEdit, usePlanUi } from "./planUi";
 import { HatchPattern, RoomShapes } from "./Shapes";
 import { useInteraction, type InteractionData } from "./useInteraction";
 import {
@@ -66,27 +66,39 @@ function useElementSize(ref: RefObject<HTMLElement>) {
 
 /** Узкий план: панель — внизу, отступы меньше. */
 const NARROW = 560;
-/**
- * Подсказка: шире HINT_CENTER — одной строкой между линейкой масштаба и
- * кнопками; шире HINT_ONE_LINE — одной строкой от левого края (линейка
- * скрыта, пока подсказка видна); ещё уже — столбиком.
- */
-const HINT_CENTER = 900;
-const HINT_ONE_LINE = 700;
-type HintMode = "center" | "left" | "stacked";
-const hintMode = (w: number): HintMode => (w >= HINT_CENTER ? "center" : w >= HINT_ONE_LINE ? "left" : "stacked");
 /** мс: показ выделения после тапа откладываем — вдруг это первый тап двойного. */
 const REVEAL_DELAY = 320;
+/** мс: подсказка исчезает плавно (как .pl-hint.is-leaving в plan.css). */
+const HINT_FADE = 180;
 
 const isNarrow = (w: number, h: number) => w < NARROW || h < 380;
+
+/** px слева, занятые линейкой масштаба, и справа — кнопками масштаба (как .pl-hint в plan.css). */
+const HINT_LEFT = 150;
+const HINT_RIGHT = 64;
+
+/**
+ * Подсказка одной строкой, где помещается (hintW — её ширина в одну строку
+ * по замеру, 0 — ещё не замерена): по центру между линейкой и кнопками
+ * масштаба; иначе от левого края (линейка на это время скрыта; на узком
+ * плане кнопки масштаба сверху, и низ свободен целиком); иначе столбиком.
+ */
+function hintMode(w: number, h: number, hintW: number): HintMode {
+  if (!hintW) return "stacked";
+  const need = hintW + 4;
+  if (isNarrow(w, h)) return need + 16 <= w ? "left" : "stacked";
+  if (need + HINT_LEFT + HINT_RIGHT <= w) return "center";
+  if (need + 12 + HINT_RIGHT <= w) return "left";
+  return "stacked";
+}
 
 /**
  * Отступы при вписывании: место под плашки размеров и оверлеи (сводка,
  * подсказка, лист выделенного внизу — sheetH px).
  */
-function fitPad(w: number, h: number, hint: boolean, coarse: boolean, sheetH: number): Pad {
+function fitPad(w: number, h: number, hint: HintMode | null, coarse: boolean, sheetH: number): Pad {
   // Подсказка столбиком (3 строки) выше однострочной — снизу нужно больше места под неё и плашки.
-  const hintPad = hintMode(w) === "stacked" ? 128 : 100;
+  const hintPad = hint === "stacked" ? 128 : 100;
   // На тач-экране плашки стен стоят дальше от стены.
   const e = coarse ? 8 : 0;
   const pad = isNarrow(w, h)
@@ -180,10 +192,24 @@ function Grid({ view, uid }: { view: View; uid: string }) {
 }
 
 /** Подсказка прячется, когда панель выделения прижата к низу. */
-function HintSlot({ coarse, mode, onClose }: { coarse: boolean; mode: HintMode; onClose: () => void }) {
+function HintSlot(props: Parameters<typeof Hint>[0]) {
   const sheet = usePlanUi((u) => u.sheetH > 0);
   if (sheet) return null;
-  return <Hint coarse={coarse} stacked={mode === "stacked"} fromLeft={mode === "left"} onClose={onClose} />;
+  return <Hint {...props} />;
+}
+
+/** Подсказку скрыли — ещё HINT_FADE мс она плавно исчезает, потом убираем совсем. */
+function useHintGone(hidden: boolean): boolean {
+  const [gone, setGone] = useState(hidden);
+  useEffect(() => {
+    if (!hidden) {
+      setGone(false);
+      return;
+    }
+    const t = window.setTimeout(() => setGone(true), HINT_FADE);
+    return () => window.clearTimeout(t);
+  }, [hidden]);
+  return gone;
 }
 
 export function PlanView(): JSX.Element {
@@ -201,9 +227,18 @@ export function PlanView(): JSX.Element {
 
   const [view, setViewState] = useState<View>({ s: 60, tx: 0, ty: 0 });
   const viewRef = useRef(view);
-  const [hintHidden, hideHint] = useHintHidden();
+  const hintHidden = usePlanUi((u) => u.hintHidden);
+  const hintGone = useHintGone(hintHidden);
   const hintRef = useRef(!hintHidden);
   hintRef.current = !hintHidden;
+  // Ширина подсказки в одну строку (замер): в ref — для вписывания в том же кадре.
+  const [hintW, setHintW] = useState(0);
+  const hintWRef = useRef(0);
+  const onHintMeasure = useCallback((px: number) => {
+    if (Math.abs(px - hintWRef.current) < 1) return;
+    hintWRef.current = px;
+    setHintW(px);
+  }, []);
   const coarseRef = useRef(coarse);
   coarseRef.current = coarse;
   const [revealTick, setRevealTick] = useState(0);
@@ -293,7 +328,8 @@ export function PlanView(): JSX.Element {
     const { w, h } = sizeRef.current;
     const host = hostRef.current;
     if (!w || !h || !host) return null;
-    const pad = fitPad(w, h, hintRef.current, coarseRef.current, usePlanUi.getState().sheetH);
+    const hint = hintRef.current ? hintMode(w, h, hintWRef.current) : null;
+    const pad = fitPad(w, h, hint, coarseRef.current, usePlanUi.getState().sheetH);
     return fitClear(r, w, h, pad, overlayBoxes(host), isNarrow(w, h), coarseRef.current);
   }, []);
 
@@ -324,9 +360,12 @@ export function PlanView(): JSX.Element {
   );
   // Комната была на экране целиком до начала перетаскивания?
   const fitBeforeEdit = useRef(false);
+  // Комната до перетаскивания: изменилась — правка удалась (подсказка новичку больше не нужна).
+  const roomBeforeEdit = useRef<Room | null>(null);
   const onEditStart = useCallback(() => {
     const { w, h } = sizeRef.current;
     fitBeforeEdit.current = !!w && !!h && boxVisible(roomBounds(dataRef.current.room), viewRef.current, w, h, -32);
+    roomBeforeEdit.current = dataRef.current.room;
   }, []);
   const onGestureEnd = useCallback(
     (tap: boolean, edited: boolean) => {
@@ -345,6 +384,8 @@ export function PlanView(): JSX.Element {
         const { w, h } = sizeRef.current;
         const st = useAppStore.getState();
         const r = st.project.rooms.find((x) => x.id === st.activeRoomId);
+        if (r && roomBeforeEdit.current && r !== roomBeforeEdit.current) notePlanEdit();
+        roomBeforeEdit.current = null;
         if (fitBeforeEdit.current && r && w && h && !boxVisible(roomBounds(r), viewRef.current, w, h, -32)) {
           fitTo(r, true);
         } else setRevealTick((t) => t + 1);
@@ -428,6 +469,12 @@ export function PlanView(): JSX.Element {
   useEffect(() => interrupt, [interrupt]);
 
   const onFit = useCallback(() => fitTo(dataRef.current.room, true), [fitTo]);
+  const onCloseHint = useCallback(() => {
+    // Крестик нажали с клавиатуры — фокус остаётся на плане, а не уходит на <body> вместе с подсказкой.
+    const host = hostRef.current;
+    if (host && document.activeElement?.closest(".pl-hint")) host.focus({ preventScroll: true });
+    usePlanUi.getState().hideHint();
+  }, []);
   const onZoom = useCallback(
     (factor: number) => {
       const { w, h } = sizeRef.current;
@@ -440,6 +487,7 @@ export function PlanView(): JSX.Element {
   /* ------------------------------ Рендер ------------------------------ */
 
   const ready = size.w > 0 && size.h > 0;
+  const hMode = hintMode(size.w, size.h, hintW);
   const translate = `translate(${Math.round(view.tx * 100) / 100} ${Math.round(view.ty * 100) / 100})`;
   const htmlTransform = `translate(${view.tx}px, ${view.ty}px)`;
 
@@ -518,15 +566,16 @@ export function PlanView(): JSX.Element {
         <>
           <Summary room={room} result={result} />
           <ZoomControls onFit={onFit} onZoom={onZoom} canIn={s < MAX_SCALE - 1e-6} canOut={s > MIN_SCALE + 1e-6} />
-          {hintHidden || (!narrow && hintMode(size.w) !== "left") ? (
+          {hintGone || (!narrow && hMode !== "left") ? (
             <div className="pl-bottom-left">
               <ScaleBar s={s} />
             </div>
           ) : null}
-          {hintHidden ? null : (
-            <HintSlot coarse={coarse} mode={hintMode(size.w)} onClose={hideHint} />
+          {hintGone ? null : (
+            <HintSlot coarse={coarse} mode={hMode} leaving={hintHidden} onClose={onCloseHint} onMeasure={onHintMeasure} />
           )}
           <ContextPanel
+            hostRef={hostRef}
             room={room}
             walls={walls}
             view={view}

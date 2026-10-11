@@ -7,7 +7,9 @@ import { useMemo } from "react";
 import { Line } from "@react-three/drei";
 import { CASING_INSET } from "../../domain/openings";
 import type { Opening } from "../../domain/types";
+import { FREE_SIDES, type OpeningSides } from "../build/sides";
 import { clipHole, openingHole } from "../build/walls";
+import { casingSpan } from "../models/Door";
 
 type P3 = [number, number, number];
 
@@ -71,7 +73,19 @@ function topMarker(W: number, th: number, y: number): P3[] {
   ];
 }
 
-export function SelectionOutline({ o, th, color, cut }: { o: Opening; th: number; color: string; cut: number }) {
+export function SelectionOutline({
+  o,
+  th,
+  color,
+  cut,
+  sides = FREE_SIDES,
+}: {
+  o: Opening;
+  th: number;
+  color: string;
+  cut: number;
+  sides?: OpeningSides;
+}) {
   const { rings, segments } = useMemo((): { rings: P3[][]; segments: boolean } => {
     const W = o.width;
     if (o.kind === "furniture") {
@@ -86,12 +100,15 @@ export function SelectionOutline({ o, th, color, cut }: { o: Opening; th: number
     if (!outer) return { rings: [topMarker(W, th, cut + 0.003)], segments: false };
     // Дверь/портал с наличниками: изнутри контур по внешнему краю наличников.
     if ((o.kind === "door" || o.kind === "passage") && o.casing > 0 && !(o.kind === "passage" && o.arch)) {
-      const ext = Math.max(0, o.casing - CASING_INSET);
+      // У угла наличник подрезан — и контур не заходит в соседнюю стену.
+      const span = casingSpan(o, sides);
+      const x0 = -span.left - Math.min(GAP, Math.max(0, sides.left.room - span.left));
+      const x1 = W + span.right + Math.min(GAP, Math.max(0, sides.right.room - span.right));
       const top = Math.min(o.height - CASING_INSET + o.casing, cut);
-      return { rings: [rect(-ext - GAP, W + ext + GAP, 0.003, top + GAP, CASING_FRONT), outer], segments: false };
+      return { rings: [rect(x0, x1, 0.003, top + GAP, CASING_FRONT), outer], segments: false };
     }
     return { rings: [holeOutline(o, cut, 0.004) ?? outer, outer], segments: false };
-  }, [o, th, cut]);
+  }, [o, th, cut, sides]);
 
   // Два прохода: чёткая линия там, где проём виден, и бледная «рентгеновская» —
   // где его загораживает стена или полотно двери (в режиме «Все» контур не висит поверх стены).

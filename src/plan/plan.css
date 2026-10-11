@@ -285,13 +285,19 @@ button.pl-chip {
   justify-content: center;
   padding: 0 6px;
 }
-.pl-chip--wall:hover,
 .pl-chip--wall.is-hover {
   border-color: var(--primary);
 }
-.pl-chip--wall:hover b,
 .pl-chip--wall.is-hover b {
   color: var(--primary);
+}
+@media (hover: hover) {
+  .pl-chip--wall:hover {
+    border-color: var(--primary);
+  }
+  .pl-chip--wall:hover b {
+    color: var(--primary);
+  }
 }
 .pl-chip--wall:active {
   transform: scale(0.97);
@@ -325,8 +331,10 @@ button.pl-chip {
   font-size: 11.5px;
   font-weight: 650;
 }
-.pl-chip--dim:hover {
-  background: var(--primary-weak);
+@media (hover: hover) {
+  .pl-chip--dim:hover {
+    background: var(--primary-weak);
+  }
 }
 .pl-chip--dim.is-tight {
   box-shadow: var(--shadow-md);
@@ -542,7 +550,7 @@ button.pl-chip {
 
 .pl-hint {
   position: absolute;
-  /* Между линейкой масштаба (слева) и кнопками масштаба (справа), по центру. */
+  /* Между линейкой масштаба (слева) и кнопками масштаба (справа), по центру (HINT_LEFT/HINT_RIGHT в PlanView). */
   left: 150px;
   right: 64px;
   bottom: 14px;
@@ -551,7 +559,6 @@ button.pl-chip {
   align-items: center;
   gap: 8px;
   width: fit-content;
-  max-width: 660px;
   margin-inline: auto;
   padding: 6px 6px 6px 12px;
   border: 1px solid var(--border);
@@ -569,6 +576,10 @@ button.pl-chip {
 .pl-hint__text {
   min-width: 0;
 }
+/* Одной строкой: план выбирает этот вид, только если строка помещается (замер .pl-hint--measure). */
+.pl-hint:not(.is-stacked) .pl-hint__text {
+  white-space: nowrap;
+}
 .pl-hint__item {
   white-space: nowrap;
 }
@@ -582,6 +593,15 @@ button.pl-chip {
 .pl-hint.is-left {
   left: 12px;
   margin-inline: 0;
+}
+/* Скрыли (крестиком или после первой правки) — плавно исчезает. */
+.pl-hint.is-leaving {
+  opacity: 0;
+  transform: translateY(4px);
+  transition:
+    opacity 0.18s ease-in,
+    transform 0.18s ease-in;
+  pointer-events: none;
 }
 /* Столбиком: по пункту в строке, без точек-разделителей. */
 .pl-hint.is-stacked {
@@ -608,9 +628,11 @@ button.pl-chip {
   background: transparent;
   color: var(--text-3);
 }
-.pl-hint__close:hover {
-  background: var(--surface-3);
-  color: var(--text);
+@media (hover: hover) {
+  .pl-hint__close:hover {
+    background: var(--surface-3);
+    color: var(--text);
+  }
 }
 
 /* --------------------------- Контекстная панель --------------------------- */
@@ -895,6 +917,36 @@ button.pl-chip {
 }
 .pl-root.is-narrow .pl-hint.is-stacked {
   padding: 8px 6px 8px 10px;
+}
+/* Узкий план, но строка помещается (телефон боком): одной строкой от левого края. */
+.pl-root.is-narrow .pl-hint.is-left {
+  width: fit-content;
+  max-width: calc(100% - 16px);
+  align-items: center;
+  padding: 6px 6px 6px 10px;
+  border-radius: 18px;
+}
+.pl-root.is-narrow .pl-hint.is-left .pl-hint__icon {
+  margin-top: 0;
+}
+.pl-root.is-narrow .pl-hint.is-left .pl-hint__item {
+  white-space: nowrap;
+}
+/* Невидимая копия подсказки в одну строку — по её ширине план выбирает вид подсказки. */
+.pl-root .pl-hint.pl-hint--measure {
+  top: 0;
+  right: auto;
+  bottom: auto;
+  left: 0;
+  width: max-content;
+  max-width: none;
+  margin: 0;
+  visibility: hidden;
+  pointer-events: none;
+  animation: none;
+}
+.pl-root .pl-hint--measure .pl-hint__item {
+  white-space: nowrap;
 }
 .pl-root.is-narrow .pl-ctx {
   padding: 10px;

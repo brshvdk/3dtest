@@ -84,7 +84,7 @@ export function fallbackProfile(height: number, depth: number): Array<[number, n
   ];
 }
 
-function dirOf(s: SkirtingSegment): Vec2 {
+export function dirOf(s: SkirtingSegment): Vec2 {
   const dx = s.b.x - s.a.x;
   const dy = s.b.y - s.a.y;
   const l = Math.hypot(dx, dy);
@@ -95,7 +95,7 @@ function dirOf(s: SkirtingSegment): Vec2 {
  * Точка сечения с отступом d на стыке P между участком с направлением d1
  * (входящим) и d2 (исходящим). Параллельные — перпендикулярный рез.
  */
-function miterPoint(P: Vec2, d1: Vec2, d2: Vec2, d: number): Vec2 {
+export function miterPoint(P: Vec2, d1: Vec2, d2: Vec2, d: number): Vec2 {
   const n1 = { x: -d1.y, y: d1.x };
   const n2 = { x: -d2.y, y: d2.x };
   const den = d1.x * d2.y - d1.y * d2.x;
@@ -108,6 +108,43 @@ function miterPoint(P: Vec2, d1: Vec2, d2: Vec2, d: number): Vec2 {
   const lim = Math.max(d * 6, 0.02);
   if (Math.hypot(x.x - P.x, x.y - P.y) > lim + d) return q;
   return x;
+}
+
+/**
+ * Нормали сечения для гладкого затенения: world(k, e, N) — нормаль вершины k
+ * на ребре e (k→k+1 или k−1→k) в мире, если сечение откладывается по
+ * горизонтальной нормали N. Соседние рёбра с углом меньше CREASE_DEG
+ * сглаживаются, острее — остаются гранью.
+ */
+export function profileNormals(profile: Array<[number, number]>): {
+  edge: Array<[number, number]>;
+  world: (k: number, e: number, N: Vec2) => V3;
+} {
+  const n = profile.length;
+  // Нормали рёбер сечения (наружу для обхода против часовой).
+  const edge: Array<[number, number]> = [];
+  for (let k = 0; k < n; k++) {
+    const p = profile[k];
+    const q = profile[(k + 1) % n];
+    const ed = q[0] - p[0];
+    const eh = q[1] - p[1];
+    const l = Math.hypot(ed, eh) || 1;
+    edge.push([eh / l, -ed / l]);
+  }
+  const cosCrease = Math.cos((CREASE_DEG * Math.PI) / 180);
+  const world = (k: number, e: number, N: Vec2): V3 => {
+    const other = e === k ? (k - 1 + n) % n : (k + 1) % n;
+    const a = edge[e];
+    const b = edge[other];
+    if (a[0] * b[0] + a[1] * b[1] >= cosCrease) {
+      const sx = a[0] + b[0];
+      const sy = a[1] + b[1];
+      const l = Math.hypot(sx, sy) || 1;
+      return [(N.x * sx) / l, sy / l, (N.y * sx) / l];
+    }
+    return [N.x * a[0], a[1], N.y * a[0]];
+  };
+  return { edge, world };
 }
 
 /**
@@ -135,31 +172,8 @@ export function buildSegmentGeometry(
     end.push([e.x, h, e.y]);
   }
 
-  // Нормали рёбер сечения (наружу для обхода против часовой).
-  const edgeN: Array<[number, number]> = [];
-  for (let k = 0; k < n; k++) {
-    const p = profile[k];
-    const q = profile[(k + 1) % n];
-    const ed = q[0] - p[0];
-    const eh = q[1] - p[1];
-    const l = Math.hypot(ed, eh) || 1;
-    edgeN.push([eh / l, -ed / l]);
-  }
-  const cosCrease = Math.cos((CREASE_DEG * Math.PI) / 180);
-  const toWorld = (nd: number, nh: number): V3 => [N.x * nd, nh, N.y * nd];
-  /** Нормаль вершины k для ребра e (сглаживаем с соседним ребром, если угол мал). */
-  const vertexNormal = (k: number, e: number): V3 => {
-    const other = e === k ? (k - 1 + n) % n : (k + 1) % n;
-    const a = edgeN[e];
-    const b = edgeN[other];
-    if (a[0] * b[0] + a[1] * b[1] >= cosCrease) {
-      const sx = a[0] + b[0];
-      const sy = a[1] + b[1];
-      const l = Math.hypot(sx, sy) || 1;
-      return toWorld(sx / l, sy / l);
-    }
-    return toWorld(a[0], a[1]);
-  };
+  const normals = profileNormals(profile);
+  const vertexNormal = (k: number, e: number): V3 => normals.world(k, e, N);
 
   for (let k = 0; k < n; k++) {
     const k2 = (k + 1) % n;

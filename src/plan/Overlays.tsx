@@ -2,7 +2,7 @@
  * Оверлеи плана поверх SVG: кнопки масштаба, масштабная линейка,
  * подсказка для новичка, сводка комнаты.
  */
-import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RoomSkirtingResult } from "../domain/skirtingCalc";
 import type { Room } from "../domain/types";
 import { formatArea, formatLength } from "../domain/units";
@@ -44,47 +44,10 @@ export const ScaleBar = memo(function ScaleBar({ s }: { s: number }) {
   );
 });
 
-const HINT_KEY = "merka:plan-hint-hidden";
+export type HintMode = "center" | "left" | "stacked";
 
-function readHintHidden(): boolean {
-  try {
-    return localStorage.getItem(HINT_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
-/** Подсказка новичку скрыта (запоминается в localStorage). */
-export function useHintHidden(): [boolean, () => void] {
-  const [hidden, setHidden] = useState(readHintHidden);
-  const hide = useCallback(() => {
-    setHidden(true);
-    try {
-      localStorage.setItem(HINT_KEY, "1");
-    } catch {
-      // приватный режим — просто скрываем до перезагрузки
-    }
-  }, []);
-  return [hidden, hide];
-}
-
-/**
- * Подсказка новичку. stacked — столбиком (узкий план): в одну строку с
- * точками при переносе точка повисала бы в конце строки.
- */
-export function Hint({
-  coarse,
-  stacked,
-  fromLeft,
-  onClose,
-}: {
-  coarse: boolean;
-  stacked: boolean;
-  /** Одной строкой от левого края (линейка масштаба на это время скрыта). */
-  fromLeft: boolean;
-  onClose: () => void;
-}) {
-  const items: Array<[string, string]> = coarse
+function hintItems(coarse: boolean): Array<[string, string]> {
+  return coarse
     ? [
         ["Тяните стену", "меняется размер"],
         ["Двойной тап по стене", "новый угол"],
@@ -95,23 +58,90 @@ export function Hint({
         ["Двойной клик по стене", "новый угол"],
         ["Колесо", "масштаб"],
       ];
+}
+
+function HintText({ items, stacked }: { items: Array<[string, string]>; stacked: boolean }) {
   return (
-    <div className={`pl-hint${stacked ? " is-stacked" : fromLeft ? " is-left" : ""}`} role="note">
-      <Icon name="info" size={15} className="pl-hint__icon" />
-      <p className="pl-hint__text">
-        {items.map(([act, res], i) => (
-          <Fragment key={i}>
-            <span className="pl-hint__item">
-              <b>{act}</b> — {res}
-            </span>
-            {!stacked && i < items.length - 1 ? <span className="pl-hint__dot">{"\u00a0· "}</span> : null}
-          </Fragment>
-        ))}
-      </p>
-      <button type="button" className="pl-hint__close" onClick={onClose} aria-label="Скрыть подсказку" title="Понятно, скрыть">
-        <Icon name="close" size={14} />
-      </button>
-    </div>
+    <>
+      {items.map(([act, res], i) => (
+        <Fragment key={i}>
+          <span className="pl-hint__item">
+            <b>{act}</b> — {res}
+          </span>
+          {!stacked && i < items.length - 1 ? <span className="pl-hint__dot">{"\u00a0· "}</span> : null}
+        </Fragment>
+      ))}
+    </>
+  );
+}
+
+/**
+ * Подсказка новичку. Одной строкой, где помещается: center — по центру между
+ * линейкой масштаба и кнопками, left — от левого края (линейка на это время
+ * скрыта); stacked — столбиком, по пункту в строке (в одну строку с
+ * переносами точка-разделитель повисала бы в конце строки).
+ *
+ * Рядом — невидимая копия в одну строку: её ширину (onMeasure) план берёт,
+ * чтобы выбрать режим по настоящему тексту и шрифту, а не по порогам ширины.
+ */
+export function Hint({
+  coarse,
+  mode,
+  leaving,
+  onClose,
+  onMeasure,
+}: {
+  coarse: boolean;
+  mode: HintMode;
+  /** Скрыта — плавно исчезает (затем план её убирает). */
+  leaving: boolean;
+  onClose: () => void;
+  /** Ширина подсказки в одну строку, px. */
+  onMeasure: (px: number) => void;
+}) {
+  const items = hintItems(coarse);
+  const measureRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const el = measureRef.current;
+    if (!el) return;
+    const measure = () => onMeasure(Math.ceil(el.getBoundingClientRect().width));
+    measure();
+    // Шрифт догрузился, сменился ввод (мышь/палец) — ширина другая.
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [onMeasure]);
+  const stacked = mode === "stacked";
+  return (
+    <>
+      <div
+        className={`pl-hint${stacked ? " is-stacked" : mode === "left" ? " is-left" : ""}${leaving ? " is-leaving" : ""}`}
+        role="note"
+        aria-hidden={leaving || undefined}
+      >
+        <Icon name="info" size={15} className="pl-hint__icon" />
+        <p className="pl-hint__text">
+          <HintText items={items} stacked={stacked} />
+        </p>
+        <button
+          type="button"
+          className="pl-hint__close"
+          onClick={onClose}
+          aria-label="Скрыть подсказку"
+          title="Понятно, скрыть"
+          tabIndex={leaving ? -1 : undefined}
+        >
+          <Icon name="close" size={14} />
+        </button>
+      </div>
+      <div ref={measureRef} className="pl-hint pl-hint--measure" aria-hidden>
+        <Icon name="info" size={15} className="pl-hint__icon" />
+        <p className="pl-hint__text">
+          <HintText items={items} stacked={false} />
+        </p>
+        <span className="pl-hint__close" />
+      </div>
+    </>
   );
 }
 

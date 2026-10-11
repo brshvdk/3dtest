@@ -808,7 +808,7 @@
 
 .k-btn--danger-solid {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-danger);
 }
 .k-btn--danger-solid:not(:disabled):hover {
   filter: brightness(0.94);
@@ -821,7 +821,7 @@
   display: grid;
   place-items: center;
   padding: 16px;
-  background: rgba(18, 19, 22, 0.42);
+  background: var(--scrim);
   animation: k-fade-in 120ms ease-out;
 }
 .k-dialog {
@@ -829,12 +829,21 @@
   grid-template-columns: auto 1fr;
   gap: 14px 14px;
   width: min(440px, 100%);
+  /* Длинный текст на низком экране прокручивается внутри окна. */
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 20px;
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
   color: var(--text);
   box-shadow: var(--shadow-lg);
   animation: k-dialog-in 160ms ease-out;
+}
+/* Фокус на самом окне (клик по тексту) — без рамки; у кнопок — обычное кольцо. */
+.k-dialog:focus {
+  outline: none;
 }
 .k-dialog__icon {
   display: grid;
@@ -871,12 +880,21 @@
   gap: 8px;
 }
 @media (max-width: 760px) {
+  /* Телефон: окно у нижнего края, над жестовой полосой; кнопки — под большой палец. */
   .k-dialog-backdrop {
     align-items: end;
+    padding: 12px 12px max(12px, env(safe-area-inset-bottom));
+  }
+  .k-dialog {
+    max-height: calc(100dvh - 24px - env(safe-area-inset-bottom));
+    padding: 18px;
+  }
+  .k-dialog__actions {
+    margin-top: 2px;
   }
   .k-dialog__actions > .k-btn {
     flex: 1 1 0;
-    --btn-h: 44px;
+    --btn-h: 48px;
   }
 }
 @keyframes k-fade-in {

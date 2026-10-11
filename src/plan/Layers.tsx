@@ -62,12 +62,16 @@ export const SelectionLayer = memo(function SelectionLayer({
 }: SelectionLayerProps) {
   const sel = useRoomSelection(room.id);
   const hover = usePlanUi((u) => u.hover);
+  // Стена, на строку которой навели в боковой панели (hoverWallId), — подсвечиваем как наведённую на плане.
+  const panelHoverWallId = useAppStore((st) => st.hoverWallId);
   const inRoom = usePlanUi((u) => u.inRoom);
   const drag = usePlanUi((u) => u.drag);
 
   const wallById = new Map(walls.map((w) => [w.id, w]));
   const selWallId = sel?.type === "wall" ? sel.wallId : null;
-  const hoverWallId = hover?.type === "wall" && hover.id !== selWallId ? hover.id : null;
+  const hoverWallIds = [hover?.type === "wall" ? hover.id : null, panelHoverWallId].filter(
+    (id, i, all): id is string => !!id && id !== selWallId && piecesByWall.has(id) && all.indexOf(id) === i,
+  );
 
   const openingOutline = (id: string, cls: string) => {
     const o = room.openings.find((x) => x.id === id);
@@ -141,7 +145,9 @@ export const SelectionLayer = memo(function SelectionLayer({
 
   return (
     <g className="pl-sel">
-      {hoverWallId ? <path className="pl-wall--hover" d={polysToPath(piecesByWall.get(hoverWallId) ?? [], s)} /> : null}
+      {hoverWallIds.map((id) => (
+        <path key={id} className="pl-wall--hover" d={polysToPath(piecesByWall.get(id) ?? [], s)} />
+      ))}
       {selWallId ? <path className="pl-wall--sel" d={polysToPath(piecesByWall.get(selWallId) ?? [], s)} /> : null}
       {hover?.type === "opening" && !(sel?.type === "opening" && sel.openingId === hover.id)
         ? openingOutline(hover.id, "pl-op--hover")

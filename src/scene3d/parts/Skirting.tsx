@@ -1,14 +1,18 @@
 /**
  * Плинтус в 3D: участок = отдельный меш (подсветка/наведение по id участка,
- * синхронно с планом и раскроем через hoverSegmentId).
+ * синхронно с планом и раскроем через hoverSegmentId). При монтаже на
+ * фурнитуру — ещё уголки, заглушки и соединители (одним мешем на комнату).
  */
 import { memo, useEffect, useMemo } from "react";
 import type { ThreeEvent } from "@react-three/fiber";
 import { Color, MeshStandardMaterial } from "three";
-import type { SkirtingSegment } from "../../domain/skirtingCalc";
+import type { Piece } from "../../domain/cutting";
+import type { RoomSkirtingResult, SkirtingSegment } from "../../domain/skirtingCalc";
+import type { SkirtingMaterial } from "../../domain/types";
 import { formatLength } from "../../domain/units";
-import { useRoomProduct, useRoomResult } from "../../state/hooks";
+import { useEstimate, useRoomProduct } from "../../state/hooks";
 import { useAppStore } from "../../state/store";
+import { buildFittingsGeometry, collectFittings, fittingsSignature } from "../build/fittings";
 import {
   buildSegmentGeometry,
   fallbackProfile,
@@ -18,7 +22,7 @@ import {
   type SegmentNeighbors,
 } from "../build/skirting";
 import { setCanvasCursor, useScene } from "../context";
-import { skirtingSurface } from "../materials";
+import { createFittingMaterial, skirtingSurface } from "../materials";
 import { HIT_MATERIAL, UNIT_BOX } from "../models/Box";
 import { clearHoverInfo, setHoverInfo } from "../sceneState";
 import { CLICK_TOLERANCE } from "./Walls";
@@ -102,10 +106,45 @@ const Segment = memo(function Segment({
   );
 });
 
+const NO_PIECES: Piece[] = [];
+
+/** Уголки, заглушки и соединители комнаты — один меш, геометрия пересобирается только при изменении набора. */
+const Fittings = memo(function Fittings({
+  result,
+  pieces,
+  profile,
+  profileKey,
+  color,
+  material,
+}: {
+  result: RoomSkirtingResult;
+  pieces: Piece[];
+  profile: Array<[number, number]>;
+  profileKey: string;
+  color: string;
+  material: SkirtingMaterial;
+}) {
+  const list = useMemo(() => collectFittings(result, pieces), [result, pieces]);
+  const sig = useMemo(() => `${fittingsSignature(list)}|${profileKey}`, [list, profileKey]);
+  const geometry = useMemo(() => buildFittingsGeometry(list, profile), [sig]);
+  useEffect(() => () => geometry?.dispose(), [geometry]);
+  const mat = useMemo(() => createFittingMaterial(color, material), [color, material]);
+  useEffect(() => () => mat.dispose(), [mat]);
+  if (!geometry) return null;
+  return <mesh geometry={geometry} material={mat} castShadow receiveShadow />;
+});
+
 export function Skirting({ roomId }: { roomId: string }) {
   const { theme } = useScene();
-  const result = useRoomResult(roomId);
+  // Расчёт и нарезка — из одной сметы: позиции соединителей = стыки кусков.
+  const estimate = useEstimate();
+  const result = estimate.rooms.find((r) => r.roomId === roomId);
+  const pieces = useMemo(
+    () => estimate.products.find((p) => p.roomIds.includes(roomId))?.pieces ?? NO_PIECES,
+    [estimate, roomId],
+  );
   const product = useRoomProduct(roomId);
+  const fittings = product.cornerMethod === "fittings";
 
   const profile = useMemo(() => {
     const p = normalizeProfile(product.profile);
@@ -113,7 +152,22 @@ export function Skirting({ roomId }: { roomId: string }) {
   }, [product.profile, product.height, product.depth]);
   const profileKey = useMemo(() => profile.map(([d, h]) => `${d.toFixed(4)},${h.toFixed(4)}`).join(";"), [profile]);
 
-  const neighbors = useMemo(() => (result ? segmentNeighbors(result) : null), [result]);
+  // На фурнитуре наружный угол закрывает скруглённый уголок — плинтус под ним
+  // режется прямо (острый запил торчал бы из скругления). Внутренние углы —
+  // с косым резом: уголок его накрывает.
+  const neighbors = useMemo(() => {
+    if (!result) return null;
+    const nb = segmentNeighbors(result);
+    if (fittings) {
+      for (const s of result.segments) {
+        const cur = nb.get(s.id);
+        if (!cur) continue;
+        if (s.startJoint === "outer") cur.prev = null;
+        if (s.endJoint === "outer") cur.next = null;
+      }
+    }
+    return nb;
+  }, [result, fittings]);
 
   const mats = useMemo<SegMats>(() => {
     const surf = skirtingSurface(product.material);
@@ -151,6 +205,16 @@ export function Skirting({ roomId }: { roomId: string }) {
           mats={mats}
         />
       ))}
+      {fittings ? (
+        <Fittings
+          result={result}
+          pieces={pieces}
+          profile={profile}
+          profileKey={profileKey}
+          color={product.color}
+          material={product.material}
+        />
+      ) : null}
     </group>
   );
 }

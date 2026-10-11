@@ -8,30 +8,41 @@ import { useFrame } from "@react-three/fiber";
 import type { Group } from "three";
 import { CASING_INSET, DOOR_FRAME } from "../../domain/openings";
 import type { Opening } from "../../domain/types";
+import { FREE_SIDES, clipExtent, type OpeningSides } from "../build/sides";
 import { useScene } from "../context";
 import type { Palette } from "../materials";
 import { Box, HitBox } from "./Box";
 
 /** Толщина наличника, м. */
-const CASING_T = 0.012;
+export const CASING_T = 0.012;
 /** Толщина полотна, м. */
 const LEAF_T = 0.038;
 /** Полотно приоткрыто, градусы. */
 const OPEN_DEG = 25;
 
+/**
+ * Выступ наличников за края проёма слева и справа, м: у самого угла наличник
+ * подрезан по соседней стене (не заходит в неё и не висит за наружным углом).
+ */
+export function casingSpan(o: Opening, sides: OpeningSides): { left: number; right: number } {
+  const ext = Math.max(0, o.casing - CASING_INSET);
+  const depth = CASING_T + 0.001;
+  return { left: clipExtent(ext, sides.left, depth), right: clipExtent(ext, sides.right, depth) };
+}
+
 /** Наличники с комнатной стороны: слева, справа и сверху. */
-export function Casings({ o, p }: { o: Opening; p: Palette }) {
+export function Casings({ o, p, sides = FREE_SIDES }: { o: Opening; p: Palette; sides?: OpeningSides }) {
   const c = o.casing;
   if (c <= 0) return null;
   const W = o.width;
   const H = o.height;
-  const ext = Math.max(0, c - CASING_INSET);
+  const { left, right } = casingSpan(o, sides);
   const yTop = H - CASING_INSET;
   return (
     <group>
-      <Box b={[-ext, CASING_INSET, 0, yTop, 0, CASING_T]} m={p.wood} />
-      <Box b={[W - CASING_INSET, W + ext, 0, yTop, 0, CASING_T]} m={p.wood} />
-      <Box b={[-ext, W + ext, yTop, yTop + c, 0, CASING_T + 0.001]} m={p.wood} />
+      <Box b={[-left, CASING_INSET, 0, yTop, 0, CASING_T]} m={p.wood} />
+      <Box b={[W - CASING_INSET, W + right, 0, yTop, 0, CASING_T]} m={p.wood} />
+      <Box b={[-left, W + right, yTop, yTop + c, 0, CASING_T + 0.001]} m={p.wood} />
     </group>
   );
 }
@@ -101,7 +112,7 @@ function Leaf({
   );
 }
 
-export function DoorModel({ o, th, p }: { o: Opening; th: number; p: Palette }) {
+export function DoorModel({ o, th, p, sides }: { o: Opening; th: number; p: Palette; sides?: OpeningSides }) {
   const W = o.width;
   const H = o.height;
   const F = DOOR_FRAME;
@@ -134,13 +145,13 @@ export function DoorModel({ o, th, p }: { o: Opening; th: number; p: Palette }) 
           p={p}
         />
       )}
-      <Casings o={o} p={p} />
+      <Casings o={o} p={p} sides={sides} />
     </group>
   );
 }
 
 /** Проём без двери: при наличниках — портал с добором по откосам. Арку не обрамляем. */
-export function PassageModel({ o, th, p }: { o: Opening; th: number; p: Palette }) {
+export function PassageModel({ o, th, p, sides }: { o: Opening; th: number; p: Palette; sides?: OpeningSides }) {
   const W = o.width;
   const H = o.height;
   const t = 0.012;
@@ -153,7 +164,7 @@ export function PassageModel({ o, th, p }: { o: Opening; th: number; p: Palette 
       <Box b={[0, t, 0, H, -th, 0.001]} m={p.wood} />
       <Box b={[W - t, W, 0, H, -th, 0.001]} m={p.wood} />
       <Box b={[0, W, H - t, H, -th, 0.001]} m={p.wood} />
-      <Casings o={o} p={p} />
+      <Casings o={o} p={p} sides={sides} />
     </group>
   );
 }

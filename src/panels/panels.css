@@ -26,6 +26,11 @@
   padding: 0 6px;
 }
 
+/* Обёртка только для обработчиков событий — в раскладке её нет */
+.pn-contents {
+  display: contents;
+}
+
 .pn-grid2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -165,28 +170,47 @@
 
 /* ========================= 1 · Комната: форма ======================== */
 
+/* Колонка панели (~280–290 px под карточки, с полосой прокрутки и без): две
+   колонки карточек «иконка + подпись» в строку — подпись 12 px помещается
+   целиком, «Прямоугольная» без переноса. Шире (телефон в альбомной, планшет) —
+   плитки с подписью под иконкой; уже — тоже плитки, но в две колонки. */
 .pn-shapes {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 .pn-shape-card {
   --pn-shape-fill: var(--surface);
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   min-width: 0;
-  padding: 8px 1px 6px;
+  min-height: 42px;
+  padding: 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-2);
+  text-align: left;
   transition:
     background var(--transition),
     border-color var(--transition),
     color var(--transition),
     box-shadow var(--transition);
+}
+.pn-shape-card > .pn-shape {
+  flex: none;
+  width: 22px;
+  height: 22px;
+}
+/* Иконка нарисована в 34 px и ужата CSS — контур остаётся прежней толщины */
+.pn-shape-card .pn-shape__poly {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 1.6;
+}
+.pn-shape-card .pn-shape.is-dashed .pn-shape__poly {
+  stroke-width: 1.3;
 }
 .pn-shape-card:hover {
   background: var(--surface);
@@ -214,21 +238,16 @@
 .pn-shape-card.is-hint:hover {
   color: var(--text-2);
 }
-/* Подпись — всегда в блоке на две строки: карточки одной высоты,
-   однострочные подписи по центру, «Прямо-угольная» переносится аккуратно. */
+/* Подпись переносится только между словами: без мягких переносов и разрывов слова */
 .pn-shape-card__label {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  max-width: 100%;
-  min-height: calc(2 * 1.2em);
-  padding: 0 2px;
-  font-size: 10.5px;
+  min-width: 0;
+  font-size: 12px;
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: -0.01em;
-  text-align: center;
   hyphens: manual;
+  overflow-wrap: normal;
+  word-break: normal;
 }
 
 /* ======================== 1 · Комната: размеры ======================= */
@@ -270,16 +289,24 @@
   place-items: center;
   width: 26px;
   height: 26px;
+  padding: 0;
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--surface-3);
   color: var(--text-2);
   font-size: var(--fs-sm);
   font-weight: 700;
+  cursor: pointer;
   transition:
     background var(--transition),
     color var(--transition);
 }
-.pn-wallrow.is-selected .pn-wallrow__badge {
+.pn-wallrow__badge:hover {
+  background: var(--primary-weak);
+  color: var(--primary);
+}
+.pn-wallrow.is-selected .pn-wallrow__badge,
+.pn-wallrow.is-selected .pn-wallrow__badge:hover {
   background: var(--primary);
   color: var(--on-primary);
 }
@@ -483,14 +510,18 @@
   gap: 8px;
   min-width: 0;
 }
+/* Подпись как в итоге («Входная дверь 960 (проём 100×210 см)») — до двух строк */
 .pn-op__title {
-  flex: 1 1 auto;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
   font-size: var(--fs-md);
   font-weight: 600;
+  line-height: 1.3;
   color: var(--text);
 }
 .pn-op__sub {
@@ -626,7 +657,18 @@
   line-height: 1.4;
 }
 .pn-impact > svg {
+  flex: none;
   margin-top: 1px;
+}
+.pn-impact__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pn-impact__detail {
+  font-weight: 400;
+  color: var(--text-2);
 }
 .pn-impact--accent {
   background: var(--accent-weak);
@@ -992,12 +1034,23 @@
 
 /* ============================ Адаптивность =========================== */
 
+/* «Прямоугольная» (93 px) рядом с иконкой уже не помещается — подпись под иконкой */
+@container pn (max-width: 307px) {
+  .pn-shape-card {
+    flex-direction: column;
+    justify-content: center;
+    gap: 4px;
+    padding: 8px 4px 6px;
+    text-align: center;
+  }
+  .pn-shape-card > .pn-shape {
+    width: 28px;
+    height: 28px;
+  }
+}
+
 /* Узкая колонка (≤ 300 px контента) */
 @container pn (max-width: 300px) {
-  .pn-shapes {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 4px;
-  }
   .pn-addgrid {
     gap: 4px;
   }
@@ -1029,8 +1082,39 @@
   }
 }
 
-/* Восемь форм в ряд — только когда подписи помещаются в карточку */
-@container pn (min-width: 680px) {
+/* Широкая панель: плитки «иконка над подписью», четыре в ряд, а когда
+   «Прямоугольная» помещается в восьмую часть ширины — восемь */
+@container pn (min-width: 480px) {
+  .pn-shapes {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+  .pn-shape-card {
+    flex-direction: column;
+    justify-content: flex-start;
+    gap: 4px;
+    padding: 8px 4px 6px;
+    text-align: center;
+  }
+  .pn-shape-card > .pn-shape {
+    width: 34px;
+    height: 34px;
+  }
+  .pn-shape-card .pn-shape__poly {
+    stroke-width: 2;
+  }
+  .pn-shape-card .pn-shape.is-dashed .pn-shape__poly {
+    stroke-width: 1.6;
+  }
+  /* Две строки под подпись: карточки одной высоты, однострочные — по центру */
+  .pn-shape-card__label {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 100%;
+    min-height: calc(2 * 1.2em);
+  }
+}
+@container pn (min-width: 960px) {
   .pn-shapes {
     grid-template-columns: repeat(8, minmax(0, 1fr));
   }

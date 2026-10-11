@@ -10,7 +10,15 @@
  * проём на шаге «Проёмы» и так открыт в инспекторе слева. Смена шага
  * закрывает панель.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type RefObject,
+} from "react";
 import { centroid, cornerAt, getWall, pointInPolygon } from "../domain/geometry";
 import { MAX_ROOM_EXTENT, MIN_WALL, removePoint } from "../domain/roomEdit";
 import { describeOpening, OPENING_KIND_META, skirtingBlock, wrapsReveals } from "../domain/openings";
@@ -20,7 +28,7 @@ import { useAppStore } from "../state/store";
 import { Button, Icon, IconButton, LengthField, Segmented, toast, type IconName } from "../ui/kit";
 import { onWall, openingExtent } from "./geom";
 import { dimChipPos, formatAngle, openingDimItems, openingDimPerp, type WallLabelLayout } from "./Labels";
-import { claimSelection, keepFocusInPlan, selectionKey, usePlanUi } from "./planUi";
+import { claimSelection, keepFocusInPlan, notePlanEdit, selectionKey, usePlanUi } from "./planUi";
 import { toScreen, type View } from "./viewport";
 
 export const KIND_ICON: Record<OpeningKind, IconName> = {
@@ -71,6 +79,7 @@ function WallContent({ wall, room, variant }: { wall: Wall; room: Room; variant:
     if (!cur || Math.abs(v - cur.length) < 1e-4) return;
     useAppStore.getState().setWallLength(wall.id, v);
     if (activeRoom() === before) toast("Такую длину не задать — стены пересекутся", "warning");
+    else notePlanEdit();
   };
   const add = (kind: OpeningKind) => {
     const id = useAppStore.getState().addOpening(kind, { wallId: wall.id });
@@ -480,12 +489,13 @@ function floorOverlap(poly: readonly Vec2[], x: number, y: number, w: number, h:
 /**
  * Место для панели рядом с выделением (box). Панель не должна закрывать
  * ручки углов и плашки стен (avoid, экранные px): иначе за соседний угол не
- * ухватиться, а размер не прочитать. И как можно меньше закрывать пол
+ * ухватиться, а размер не прочитать; и оверлеи плана (overlays — сводка,
+ * кнопки масштаба, подсказка). И как можно меньше закрывать пол
  * комнаты (floor — её контур на экране): сначала пробуем снаружи стены
  * (против dir — направления в комнату), потом сбоку, потом внутри. Из
  * положений без помех берём то, что меньше всего закрывает комнату.
  */
-function place(
+export function place(
   box: Box,
   dir: Vec2,
   pw: number,
@@ -494,6 +504,7 @@ function place(
   H: number,
   avoid: readonly Box[],
   floor: readonly Vec2[],
+  overlays: readonly Box[] = [],
 ): { x: number; y: number } | null {
   const gap = 10;
   const m = 8;
@@ -504,19 +515,17 @@ function place(
   const cy = (box.y0 + box.y1) / 2;
   const clampX = (x: number) => Math.min(W - pw - m, Math.max(m, x));
   const clampY = (y: number) => Math.min(H - ph - m, Math.max(m, y));
-  // То, что входит в само выделение (концы стены, её плашка), не считаем.
-  const others = avoid.filter((a) => {
-    const cx = (a.x0 + a.x1) / 2;
-    const cy = (a.y0 + a.y1) / 2;
-    return cx < box.x0 || cx > box.x1 || cy < box.y0 || cy > box.y1;
-  });
-  const hits = (x: number, y: number) => {
+  // То, что входит в само выделение (концы стены, её плашка), не считаем; оверлеи — всегда.
+  const others = avoid
+    .filter((a) => {
+      const cx = (a.x0 + a.x1) / 2;
+      const cy = (a.y0 + a.y1) / 2;
+      return cx < box.x0 || cx > box.x1 || cy < box.y0 || cy > box.y1;
+    })
+    .concat(overlays);
+  const blockers = (x: number, y: number) => {
     const pad = 4;
-    let n = 0;
-    for (const a of others) {
-      if (a.x1 > x - pad && a.x0 < x + pw + pad && a.y1 > y - pad && a.y0 < y + ph + pad) n++;
-    }
-    return n;
+    return others.filter((a) => a.x1 > x - pad && a.x0 < x + pw + pad && a.y1 > y - pad && a.y0 < y + ph + pad);
   };
   let best: { x: number; y: number; score: number } | null = null;
   for (let rank = 0; rank < order.length; rank++) {
@@ -536,13 +545,80 @@ function place(
       for (const a of others) if (a.x1 > x && a.x0 < x + pw) ys.push(a.y0 - 6 - ph, a.y1 + 6);
       for (const y of ys) candidates.push({ x, y: clampY(y) });
     }
-    for (const c of candidates) {
+    const consider = (x: number, y: number, hit: readonly Box[]) => {
       // Помеха — почти запрет; закрытый пол — px²; порядок сторон — при равенстве.
-      const score = hits(c.x, c.y) * 1e7 + floorOverlap(floor, c.x, c.y, pw, ph) + rank;
-      if (!best || score < best.score) best = { ...c, score };
+      const score = hit.length * 1e7 + floorOverlap(floor, x, y, pw, ph) + rank;
+      if (!best || score < best.score) best = { x, y, score };
+    };
+    for (const c of candidates) {
+      const hit = blockers(c.x, c.y);
+      consider(c.x, c.y, hit);
+      if (!hit.length) continue;
+      // Упёрлись в помеху (плашки стен по обе стороны, подсказка) — пробуем дальше от выделения, за ней.
+      if (side === "above") {
+        const y = Math.min(...hit.map((a) => a.y0)) - 6 - ph;
+        if (y >= m) consider(c.x, y, blockers(c.x, y));
+      } else if (side === "below") {
+        const y = Math.max(...hit.map((a) => a.y1)) + 6;
+        if (y + ph <= H - m) consider(c.x, y, blockers(c.x, y));
+      } else if (side === "left") {
+        const x = Math.min(...hit.map((a) => a.x0)) - 6 - pw;
+        if (x >= m) consider(x, c.y, blockers(x, c.y));
+      } else {
+        const x = Math.max(...hit.map((a) => a.x1)) + 6;
+        if (x + pw <= W - m) consider(x, c.y, blockers(x, c.y));
+      }
     }
   }
   return best;
+}
+
+/** Оверлеи плана, которые панель не должна закрывать. */
+const OVERLAYS = ".pl-summary, .pl-zoom, .pl-hint:not(.pl-hint--measure)";
+const NO_BOXES: readonly Box[] = [];
+
+const sameBoxes = (a: readonly Box[], b: readonly Box[]): boolean =>
+  a.length === b.length &&
+  a.every((x, i) => x.x0 === b[i].x0 && x.y0 === b[i].y0 && x.x1 === b[i].x1 && x.y1 === b[i].y1);
+
+/**
+ * Габариты оверлеев (px от левого верхнего угла плана), пока active.
+ * Меряем не в рендере (он идёт на каждом кадре пана), а при смене размера
+ * плана и когда оверлей появился, исчез или поменял размер (подсказка в
+ * одну строку ↔ столбиком).
+ */
+function useOverlayBoxes(hostRef: RefObject<HTMLElement>, active: boolean, width: number, height: number): readonly Box[] {
+  const [boxes, setBoxes] = useState<readonly Box[]>(NO_BOXES);
+  useLayoutEffect(() => {
+    const host = hostRef.current;
+    if (!active || !host) return;
+    const measure = () => {
+      const R = host.getBoundingClientRect();
+      const next = [...host.querySelectorAll<HTMLElement>(OVERLAYS)].map((el) => {
+        const r = el.getBoundingClientRect();
+        return { x0: r.left - R.left, y0: r.top - R.top, x1: r.right - R.left, y1: r.bottom - R.top };
+      });
+      setBoxes((cur) => (sameBoxes(cur, next) ? cur : next));
+    };
+    const ro = new ResizeObserver(measure);
+    const observe = () => {
+      ro.disconnect();
+      for (const el of host.querySelectorAll<HTMLElement>(OVERLAYS)) ro.observe(el);
+    };
+    // Подсказку скрыли (или показали) — оверлей под .pl-root убрался/добавился.
+    const mo = new MutationObserver(() => {
+      observe();
+      measure();
+    });
+    mo.observe(host, { childList: true });
+    observe();
+    measure();
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+    };
+  }, [hostRef, active, width, height]);
+  return active ? boxes : NO_BOXES;
 }
 
 /* ------------------------------ Панель ------------------------------ */
@@ -562,6 +638,8 @@ export function useContextShown(roomId: string): boolean {
 }
 
 export interface ContextPanelProps {
+  /** Корень плана (.pl-root): панель не закрывает его оверлеи. */
+  hostRef: RefObject<HTMLElement>;
   room: Room;
   walls: readonly Wall[];
   view: View;
@@ -588,6 +666,7 @@ export interface ContextPanelProps {
 }
 
 export function ContextPanel({
+  hostRef,
   room,
   walls,
   view,
@@ -669,6 +748,7 @@ export function ContextPanel({
     label = "Угол комнаты";
   }
   const visible = shown && !!content;
+  const overlays = useOverlayBoxes(hostRef, visible && !docked, width, height);
 
   let pos: { x: number; y: number } | null = null;
   if (visible && sel && !docked && size) {
@@ -683,7 +763,7 @@ export function ContextPanel({
         avoid.push({ x0: r.x0 + view.tx, y0: r.y0 + view.ty, x1: r.x1 + view.tx, y1: r.y1 + view.ty });
       }
       const floor = room.points.map((p) => toScreen(view, p));
-      pos = place(sb.box, sb.dir, size.w, size.h, width, height, avoid, floor);
+      pos = place(sb.box, sb.dir, size.w, size.h, width, height, avoid, floor, overlays);
     }
   }
   const isDocked = docked || (!!size && !pos);
@@ -733,9 +813,11 @@ export function ContextPanel({
 
   if (!visible || !sel) return null;
 
-  // Esc внутри панели закрывает её и возвращает фокус на объект плана (поле ввода обрабатывает Esc само).
+  // Esc внутри панели закрывает её и возвращает фокус на объект плана. Поле длины
+  // первый Esc после ввода гасит само (отменяет напечатанное, событие дальше не идёт);
+  // Esc без правок в поле доходит сюда — выходим из поля и закрываем панель.
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Escape" || (e.target as HTMLElement).tagName === "INPUT") return;
+    if (e.key !== "Escape" || e.defaultPrevented) return;
     e.preventDefault();
     e.stopPropagation();
     const root = elRef.current?.closest<HTMLElement>(".pl-root");

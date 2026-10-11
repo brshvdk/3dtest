@@ -81,6 +81,11 @@ const MIN_CORNER_DEG = 5;
 const PARALLEL_SIN = Math.sin(toRad(STRAIGHT_TOL_DEG));
 /** м, зазор между проёмами при автоматической расстановке. */
 export const FREE_GAP = 0.05;
+/**
+ * м, желательный зазор при авторасстановке: иначе между наличниками соседних
+ * проёмов остаётся «огрызок» плинтуса в 5 см. Если места нет — FREE_GAP.
+ */
+export const PREFERRED_GAP = 0.3;
 /** м, минимальная ширина проёма. */
 export const MIN_OPENING_WIDTH = 0.05;
 /** м, допустимые толщины стен. */
@@ -90,6 +95,12 @@ export const MAX_WALL_THICKNESS = 1;
 const ZERO_WALL = 1e-3;
 /** м, мебель короче не ставим при подгонке ширины. */
 const MIN_FURNITURE_WIDTH = 0.3;
+/**
+ * м, сколько места оставлять между мебелью и соседней стеной, если на той у
+ * угла дверь, проход или балкон: полотно двери открывается, через проём можно
+ * пройти. Вплотную к такому углу мебель не ставится — боковина перекроет проём.
+ */
+export const DOORWAY_CLEARANCE = 0.9;
 
 /* ----------------------------- Проверки ----------------------------- */
 
@@ -382,6 +393,11 @@ export interface FreeSpotOptions {
   excludeId?: string;
   /** Наличники обязаны помещаться в стену (иначе при нехватке места проём ставится по центру). */
   strict?: boolean;
+  /**
+   * Минимальные расстояния от проёма (без наличников) до начала и до конца
+   * стены, м: участки у углов, куда ставить нельзя (см. furnitureKeepOut).
+   */
+  keepOut?: readonly [number, number];
 }
 
 /** Свободные диапазоны offset (замкнутые отрезки) для проёма ширины width. */
@@ -393,7 +409,14 @@ function freeOffsetRanges(room: Room, wall: Wall, width: number, opts: FreeSpotO
   // Наличники по возможности тоже внутри стены (иначе — проём по центру).
   if (opts.strict && width + 2 * ext > L + 1e-9) return [];
   const margin = Math.min(ext, (L - width) / 2);
-  let ranges: Array<[number, number]> = [[margin, L - width - margin]];
+  const [keepStart, keepEnd] = opts.keepOut ?? [0, 0];
+  const start = Math.max(margin, keepStart);
+  let end = L - width - Math.max(margin, keepEnd);
+  if (start > end) {
+    if (start - end > 1e-9) return [];
+    end = start;
+  }
+  let ranges: Array<[number, number]> = [[start, end]];
   for (const o of room.openings) {
     if (o.wallId !== wall.id || o.id === opts.excludeId) continue;
     const fp = footprint(o);
@@ -428,7 +451,11 @@ export function findFreeSpot(
 ): number | null {
   const wall = getWall(room, wallId);
   if (!wall) return null;
-  const ranges = freeOffsetRanges(room, wall, width, opts);
+  let ranges =
+    opts.gap === undefined
+      ? freeOffsetRanges(room, wall, width, { ...opts, gap: PREFERRED_GAP })
+      : [];
+  if (!ranges.length) ranges = freeOffsetRanges(room, wall, width, opts);
   if (!ranges.length) return null;
   const target = opts.near ?? (preferCenter ? (wall.length - width) / 2 : ranges[0][0]);
   let best: number | null = null;
@@ -482,29 +509,80 @@ function presetCandidates(kind: OpeningKind, presetId?: string): string[] {
 /** Виды, которым мебель в углу перекрыла бы проход боковиной. */
 const BLOCKED_BY_FURNITURE: OpeningKind[] = ["door", "passage", "balcony"];
 
+/** Конец стены: 0 — начало, 1 — конец. */
+type WallEnd = 0 | 1;
+
+/** Соседняя стена у конца end стены wall, если угол между ними внутренний; иначе null. */
+function innerNeighbour(room: Room, walls: Wall[], wall: Wall, end: WallEnd): Wall | null {
+  const n = walls.length;
+  if (n < 3) return null;
+  if (cornerAt(room, end === 0 ? wall.index : (wall.index + 1) % n).kind !== "inner") return null;
+  return walls[end === 0 ? (wall.index - 1 + n) % n : (wall.index + 1) % n];
+}
+
+/**
+ * Расстояние от общего угла до ближнего к нему края участка [from, to] соседней
+ * стены adj (adj примыкает к концу end нашей стены: к началу — своим концом).
+ */
+const distFromCorner = (adj: Wall, end: WallEnd, from: number, to: number): number =>
+  end === 0 ? adj.length - to : from;
+
+/**
+ * Боковина мебели (глубина + зазор) у внутреннего угла перекрывает дверь, проход
+ * или балкон соседней стены, если такой проём ближе к углу, чем reach. Тогда
+ * мебель ставится не ближе DOORWAY_CLEARANCE к этому концу стены.
+ * Результат — keepOut для findFreeSpot: [от начала, от конца], м.
+ */
+function furnitureKeepOut(room: Room, walls: Wall[], wall: Wall, depth: number): [number, number] {
+  const reach = Math.max(0, depth) + FREE_GAP;
+  const keep: [number, number] = [0, 0];
+  for (const end of [0, 1] as const) {
+    const adj = innerNeighbour(room, walls, wall, end);
+    if (!adj) continue;
+    const blocked = room.openings.some((x) => {
+      if (x.wallId !== adj.id || !BLOCKED_BY_FURNITURE.includes(x.kind)) return false;
+      const fp = footprint(x);
+      return distFromCorner(adj, end, fp.from, fp.to) < reach;
+    });
+    if (blocked) keep[end] = DOORWAY_CLEARANCE;
+  }
+  return keep;
+}
+
+/**
+ * Обратное правило для двери, прохода и балкона: у внутреннего угла, где
+ * мебель соседней стены стоит ближе DOORWAY_CLEARANCE, проём (с наличниками)
+ * не заходит за её боковину. Результат — keepOut для findFreeSpot.
+ */
+function doorwayKeepOut(room: Room, walls: Wall[], wall: Wall, o: Opening): [number, number] {
+  const keep: [number, number] = [0, 0];
+  if (!BLOCKED_BY_FURNITURE.includes(o.kind)) return keep;
+  const ext = casingExtension(o);
+  for (const end of [0, 1] as const) {
+    const adj = innerNeighbour(room, walls, wall, end);
+    if (!adj) continue;
+    for (const f of room.openings) {
+      if (f.wallId !== adj.id || f.kind !== "furniture") continue;
+      if (distFromCorner(adj, end, f.offset, f.offset + f.width) >= DOORWAY_CLEARANCE) continue;
+      keep[end] = Math.max(keep[end], Math.max(0, f.depth) + FREE_GAP + ext);
+    }
+  }
+  return keep;
+}
+
 /**
  * offset мебели в углу стены: у начала (0) или у конца (L − width), если
- * угол внутренний, место на стене свободно, а боковина (глубина + зазор)
- * не загораживает дверь или проём на соседней стене. null — свободного угла нет.
+ * угол внутренний, место на стене свободно, а боковины (глубина + зазор)
+ * не загораживают дверь или проём на соседних стенах. null — свободного угла нет.
  */
 function cornerSpot(room: Room, walls: Wall[], wall: Wall, o: Opening): number | null {
-  const n = walls.length;
-  const ends = [
-    { offset: 0, corner: wall.index, adj: walls[(wall.index - 1 + n) % n], adjAtEnd: true },
-    { offset: wall.length - o.width, corner: (wall.index + 1) % n, adj: walls[(wall.index + 1) % n], adjAtEnd: false },
-  ];
-  for (const e of ends) {
-    if (e.offset < -1e-9 || cornerAt(room, e.corner).kind !== "inner") continue;
-    const spot = findFreeSpot(room, wall.id, o.width, true, { near: e.offset, strict: true });
-    if (spot === null || Math.abs(spot - e.offset) > 1e-4) continue;
-    const reach = Math.max(0, o.depth) + FREE_GAP;
-    const [from, to] = e.adjAtEnd ? [e.adj.length - reach, e.adj.length] : [0, reach];
-    const blocked = room.openings.some((x) => {
-      if (x.wallId !== e.adj.id || !BLOCKED_BY_FURNITURE.includes(x.kind)) return false;
-      const fp = footprint(x);
-      return fp.from < to && fp.to > from;
-    });
-    if (!blocked) return spot;
+  const keepOut = furnitureKeepOut(room, walls, wall, o.depth);
+  for (const end of [0, 1] as const) {
+    const offset = end === 0 ? 0 : wall.length - o.width;
+    if (offset < -1e-9 || keepOut[end] > 0 || !innerNeighbour(room, walls, wall, end)) continue;
+    // keepOut проверяет и другой конец: длинная мебель не должна упереться боковиной в дверь там.
+    const spot = findFreeSpot(room, wall.id, o.width, true, { near: offset, strict: true, keepOut });
+    if (spot !== null && Math.abs(spot - offset) <= 1e-4) return spot;
   }
   return null;
 }
@@ -519,7 +597,10 @@ const appendOpening = (room: Room, o: Opening): { room: Room; openingId: string 
  * (в opts.offset или по центру, иначе в ближайшее свободное место); иначе —
  * на самую длинную подходящую стену (окну — стену без дверей, двери — без окон).
  * Если стандартный размер не влезает — пробует размеры поуже; мебель
- * подгоняется по ширине свободного места. Нет места — openingId = null.
+ * подгоняется по ширине свободного места (не шире своего пресета). Мебель
+ * никогда не встаёт боковиной перед дверью, проходом или балконом соседней
+ * стены (DOORWAY_CLEARANCE), а дверь по возможности не встаёт за боковину
+ * мебели. Нет места — openingId = null.
  */
 export function addOpening(
   room: Room,
@@ -531,34 +612,49 @@ export function addOpening(
   if (!walls.length) return { room, openingId: null };
   const near = opts.wallId && opts.offset !== undefined && Number.isFinite(opts.offset) ? opts.offset : undefined;
 
-  // Сначала ищем место, где проём помещается вместе с наличниками, затем — без них.
+  const all = getWalls(room);
+  const furniture = kind === "furniture";
   const presets = presetCandidates(kind, opts.presetId);
-  if (kind === "furniture" && near === undefined) {
+  if (furniture && near === undefined) {
     // Гарнитур и шкафы стоят в углу, а не посреди стены с обрезками плинтуса по бокам.
     const proto = createOpening(kind, walls[0].id, 0, presets[0]);
-    const all = getWalls(room);
     for (const wall of walls) {
       const offset = cornerSpot(room, all, wall, proto);
       if (offset !== null) return appendOpening(room, { ...proto, wallId: wall.id, offset });
     }
   }
+
+  // Место выбираем сами — мебель не ставим боковиной перед дверью, проходом или балконом
+  // соседней стены. Дверь же при прочих равных не ставим за боковину мебели, но если иначе
+  // не помещается — ставим (мебель передвинуть проще, чем дверь). Явный offset — как задан.
+  const avoidModes: boolean[] =
+    near !== undefined ? [false] : furniture ? [true] : BLOCKED_BY_FURNITURE.includes(kind) ? [true, false] : [false];
+  const keepOutFor = (wall: Wall, proto: Opening): [number, number] =>
+    furniture ? furnitureKeepOut(room, all, wall, proto.depth) : doorwayKeepOut(room, all, wall, proto);
+
+  // Сначала ищем место, где проём помещается вместе с наличниками, затем — без них.
   for (const strict of [true, false]) {
     for (const presetId of presets) {
       const proto = createOpening(kind, walls[0].id, 0, presetId);
       const extension = casingExtension(proto);
-      for (const wall of walls) {
-        const offset = findFreeSpot(room, wall.id, proto.width, true, { extension, near, strict });
-        if (offset !== null) return appendOpening(room, { ...proto, wallId: wall.id, offset });
+      for (const avoid of avoidModes) {
+        for (const wall of walls) {
+          const keepOut = avoid ? keepOutFor(wall, proto) : undefined;
+          const offset = findFreeSpot(room, wall.id, proto.width, true, { extension, near, strict, keepOut });
+          if (offset !== null) return appendOpening(room, { ...proto, wallId: wall.id, offset });
+        }
       }
     }
   }
 
-  if (kind === "furniture") {
-    // Мебель подгоняем под самый большой свободный участок.
-    const proto = createOpening(kind, walls[0].id, 0, opts.presetId ?? DEFAULT_PRESET_ID.furniture);
+  if (furniture) {
+    // Стандартный размер нигде не помещается: мебель занимает самый большой свободный
+    // участок, но не шире своего пресета и тоже не перекрывая проёмы соседних стен.
+    const proto = createOpening(kind, walls[0].id, 0, presets[0]);
     let best: { wall: Wall; offset: number; width: number } | null = null;
     for (const wall of walls) {
-      for (const [s, e] of freeOffsetRanges(room, wall, MIN_FURNITURE_WIDTH, {})) {
+      const keepOut = furnitureKeepOut(room, all, wall, proto.depth);
+      for (const [s, e] of freeOffsetRanges(room, wall, MIN_FURNITURE_WIDTH, { keepOut })) {
         const span = e - s + MIN_FURNITURE_WIDTH;
         const width = Math.min(proto.width, span);
         if (!best || width > best.width + 1e-9) best = { wall, offset: s + (span - width) / 2, width };

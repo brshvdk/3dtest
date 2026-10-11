@@ -5,6 +5,8 @@
  * Правила истории:
  *  - любая правка проекта ставит updatedAt и кладёт прежний проект в past
  *    (≤ HISTORY_LIMIT), future очищается;
+ *  - undo/redo возвращают снимок из истории как новую ревизию: содержимое то
+ *    же (по ссылкам), updatedAt — время перехода;
  *  - между beginGesture и endGesture весь жест (перетаскивание) — одна
  *    запись, она появляется в endGesture, если проект изменился;
  *  - transient-правки вне жеста склеиваются в одну запись до первой
@@ -69,7 +71,11 @@ export interface AppState {
   selection: Selection;
   /** Подсветка участка плинтуса между планом/3D/раскроем. */
   hoverSegmentId: string | null;
-  /** Подсветка стены активной комнаты при наведении в панелях (план/3D). */
+  /**
+   * Подсветка стены активной комнаты при наведении в панелях (план/3D).
+   * Снимается при смене активной комнаты, undo/redo, новом или загруженном
+   * проекте и когда подсвеченной стены больше нет (удалили точку, шаблон).
+   */
   hoverWallId: string | null;
   view: ViewMode;
   panelTab: PanelTab;
@@ -169,6 +175,12 @@ function validSelection(project: Project, activeRoomId: string, sel: Selection):
     case "opening":
       return room.openings.some((o) => o.id === sel.openingId) ? sel : null;
   }
+}
+
+/** Подсветка стены (hoverWallId), если стена есть в активной комнате, иначе null. */
+function validHoverWall(project: Project, activeRoomId: string, wallId: string | null): string | null {
+  if (wallId === null) return null;
+  return findRoom(project, activeRoomId)?.points.some((p) => p.id === wallId) ? wallId : null;
 }
 
 /** Активная комната и выделение, согласованные с проектом. */
@@ -393,6 +405,8 @@ interface CommitOpts {
   coalesce?: string;
   activeRoomId?: string;
   selection?: Selection;
+  /** Снять подсветку стены (новый проект целиком). */
+  resetHover?: boolean;
 }
 
 export const useAppStore = create<AppState>()(
@@ -432,16 +446,17 @@ export const useAppStore = create<AppState>()(
           lastCommit = key !== undefined ? { key, at: now } : null;
         }
         const project: Project = { ...next, updatedAt: now };
-        set({
+        const view = consistentView(
           project,
-          past,
-          future,
-          ...consistentView(
-            project,
-            opts.activeRoomId ?? s.activeRoomId,
-            opts.selection !== undefined ? opts.selection : s.selection,
-          ),
-        });
+          opts.activeRoomId ?? s.activeRoomId,
+          opts.selection !== undefined ? opts.selection : s.selection,
+        );
+        // Подсветка из панели живёт, пока жива её стена в той же активной комнате.
+        const hoverWallId =
+          opts.resetHover || view.activeRoomId !== s.activeRoomId
+            ? null
+            : validHoverWall(project, view.activeRoomId, s.hoverWallId);
+        set({ project, past, future, ...view, hoverWallId });
         return true;
       };
 
@@ -458,7 +473,12 @@ export const useAppStore = create<AppState>()(
         return commit(replaceRoom(get().project, next), opts);
       };
 
-      /** Переход по истории (undo/redo). */
+      /**
+       * Переход по истории (undo/redo). Снимок возвращается тем же содержимым
+       * (комнаты и настройки — те же объекты), но как новая ревизия проекта —
+       * со свежим updatedAt: проект изменился сейчас, и это должны видеть другие
+       * вкладки (свежее — значит принять), список недавних проектов и печать.
+       */
       const travel = (from: "past" | "future") => {
         flushGesture();
         lastCommit = null;
@@ -467,11 +487,14 @@ export const useAppStore = create<AppState>()(
         if (!stack.length) return;
         const target = from === "past" ? stack[stack.length - 1] : stack[0];
         const rest = from === "past" ? stack.slice(0, -1) : stack.slice(1);
+        const project: Project = { ...target, updatedAt: Date.now() };
         set({
-          project: target,
+          project,
           past: from === "past" ? rest : pushHistory(s.past, s.project),
           future: from === "past" ? [s.project, ...s.future].slice(0, HISTORY_LIMIT) : rest,
-          ...consistentView(target, roomToReveal(s.project, target, s.activeRoomId), s.selection),
+          ...consistentView(project, roomToReveal(s.project, project, s.activeRoomId), s.selection),
+          // Стены могли исчезнуть или смениться под указателем; комната — тоже.
+          hoverWallId: null,
         });
       };
 
@@ -501,14 +524,14 @@ export const useAppStore = create<AppState>()(
         newProject: () => {
           flushGesture();
           const p = createProject();
-          commit(p, { activeRoomId: p.rooms[0].id, selection: null });
+          commit(p, { activeRoomId: p.rooms[0].id, selection: null, resetHover: true });
         },
         loadProject: (p) => {
           // Проект приходит извне (файл, ссылка) — проверяем так же, как localStorage.
           const project = migrateProject(p);
           if (!project) return;
           flushGesture();
-          commit(project, { activeRoomId: project.rooms[0].id, selection: null });
+          commit(project, { activeRoomId: project.rooms[0].id, selection: null, resetHover: true });
         },
         renameProject: (name) => {
           const project = get().project;
@@ -549,7 +572,7 @@ export const useAppStore = create<AppState>()(
         setActiveRoom: (roomId) => {
           const s = get();
           if (roomId === s.activeRoomId || !findRoom(s.project, roomId)) return;
-          set({ activeRoomId: roomId, selection: null });
+          set({ activeRoomId: roomId, selection: null, hoverWallId: null });
         },
         renameRoom: (roomId, name) => {
           const { project } = get();
@@ -680,8 +703,10 @@ export const useAppStore = create<AppState>()(
           // Выделение в другой комнате делает её активной.
           const roomId = sel && findRoom(s.project, sel.roomId) ? sel.roomId : s.activeRoomId;
           const selection = validSelection(s.project, roomId, sel);
-          if (selection === s.selection && roomId === s.activeRoomId) return;
-          set({ selection, activeRoomId: roomId });
+          // Заодно сверяем подсветку: проект мог смениться в обход стора (другая вкладка).
+          const hoverWallId = roomId === s.activeRoomId ? validHoverWall(s.project, roomId, s.hoverWallId) : null;
+          if (selection === s.selection && roomId === s.activeRoomId && hoverWallId === s.hoverWallId) return;
+          set({ selection, activeRoomId: roomId, hoverWallId });
         },
         setHoverSegment: (id) => {
           if (get().hoverSegmentId !== id) set({ hoverSegmentId: id });

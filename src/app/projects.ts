@@ -7,7 +7,7 @@ import { useSyncExternalStore } from "react";
 import { migrateProject } from "../domain/project";
 import type { Project } from "../domain/types";
 import { useAppStore } from "../state/store";
-import { toast } from "../ui/kit";
+import { confirmAction, toast } from "../ui/kit";
 
 const KEY = "merka:projects";
 const LIMIT = 8;
@@ -84,18 +84,29 @@ export function useArchive(): ArchivedProject[] {
 
 const undoAction = { label: "Вернуть", onClick: () => useAppStore.getState().undo() };
 
-/** «Новый проект»: текущий уходит в «Недавние проекты». */
-export function startNewProject(): void {
+/**
+ * «Новый проект»: текущий уходит в «Недавние проекты». Если браузер не даёт
+ * его туда сохранить — сначала спрашиваем (свой диалог, не window.confirm).
+ */
+export async function startNewProject(): Promise<void> {
   const current = useAppStore.getState().project;
   if (!archiveProject(current)) {
-    const ok = window.confirm(
-      `Начать новый проект? Браузер не даёт сохранить «${current.name}» в списке недавних: ` +
-        "после перезагрузки страницы его не вернуть. Если он нужен — сначала скопируйте ссылку «Поделиться».",
-    );
+    const ok = await confirmAction({
+      title: "Начать новый проект?",
+      message:
+        `Браузер не даёт сохранить «${current.name}» в списке недавних проектов: после перезагрузки ` +
+        "страницы его не вернуть. Если он нужен — сначала скопируйте ссылку «Поделиться».",
+      confirmLabel: "Начать новый",
+      tone: "danger",
+      icon: "warning",
+    });
     if (!ok) return;
   }
+  // Пока диалог был открыт, проект могла сменить другая вкладка — сохраняем тот, что открыт сейчас.
+  const latest = useAppStore.getState().project;
+  if (latest !== current) archiveProject(latest);
   useAppStore.getState().newProject();
-  toast(`Создан новый проект. «${current.name}» — в меню проекта`, "info", { action: undoAction });
+  toast(`Создан новый проект. «${latest.name}» — в меню проекта`, "info", { action: undoAction });
 }
 
 /**

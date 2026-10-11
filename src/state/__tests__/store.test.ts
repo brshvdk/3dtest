@@ -5,6 +5,7 @@ import { getCatalogProduct } from "../../domain/skirtingCatalog";
 import type { Project, Room } from "../../domain/types";
 import { getEstimate, getRoomMetrics, getRoomProduct, getRoomWalls } from "../hooks";
 import { HISTORY_LIMIT, initFromUrl, useAppStore } from "../store";
+import { expectSameVersion } from "./historyExpect";
 
 const S = () => useAppStore.getState();
 const room = (): Room => S().project.rooms.find((r) => r.id === S().activeRoomId)!;
@@ -18,6 +19,7 @@ function reset(project: Project = createProject()) {
     activeRoomId: project.rooms[0].id,
     selection: null,
     hoverSegmentId: null,
+    hoverWallId: null,
     view: "split",
     panelTab: "room",
     past: [],
@@ -55,10 +57,10 @@ describe("история", () => {
     expect(getWalls(room())[0].length).toBeCloseTo(5);
     expect(S().past).toEqual([p0]);
     S().undo();
-    expect(S().project).toBe(p0);
+    expectSameVersion(S().project, p0);
     expect(S().future).toEqual([p1]);
     S().redo();
-    expect(S().project).toBe(p1);
+    expectSameVersion(S().project, p1);
     expect(S().future).toEqual([]);
     // новая правка очищает future
     S().undo();
@@ -81,6 +83,27 @@ describe("история", () => {
     expect(S().project.updatedAt).toBe(1_900_000_000_000);
   });
 
+  it("undo/redo — новая ревизия: содержимое снимка, updatedAt — время перехода", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_900_000_000_000);
+    const p0 = S().project;
+    S().setWallLength(wallIds()[0], 5);
+    const p1 = S().project;
+    now.mockReturnValue(1_900_000_060_000);
+    S().undo();
+    // Тот же проект, что до правки (комнаты — те же объекты), но изменён только что:
+    // другие вкладки примут его как более свежий, список недавних и печать покажут время отмены.
+    expect(S().project.rooms).toBe(p0.rooms);
+    expect(S().project.updatedAt).toBe(1_900_000_060_000);
+    expect(S().project.updatedAt).toBeGreaterThan(p1.updatedAt);
+    now.mockReturnValue(1_900_000_120_000);
+    S().redo();
+    expect(S().project.rooms).toBe(p1.rooms);
+    expect(S().project.updatedAt).toBe(1_900_000_120_000);
+    // Пустая история — проект не трогаем, updatedAt прежний.
+    S().redo();
+    expect(S().project.updatedAt).toBe(1_900_000_120_000);
+  });
+
   it(`не больше ${HISTORY_LIMIT} шагов`, () => {
     for (let i = 0; i < HISTORY_LIMIT + 10; i++) S().setWallLength(wallIds()[0], i % 2 ? 5 : 6);
     expect(S().past).toHaveLength(HISTORY_LIMIT);
@@ -97,7 +120,7 @@ describe("история", () => {
     S().endGesture();
     expect(S().past).toEqual([base]);
     S().undo();
-    expect(S().project).toBe(base);
+    expectSameVersion(S().project, base);
   });
 
   it("жест без изменений не пишет историю", () => {
@@ -117,7 +140,7 @@ describe("история", () => {
     expect(S().past).toEqual([base, dragged]);
     S().undo();
     S().undo();
-    expect(S().project).toBe(base);
+    expectSameVersion(S().project, base);
   });
 
   it("частые правки одного поля склеиваются", () => {
@@ -179,6 +202,94 @@ describe("выделение", () => {
     expect(S().selection?.type).toBe("point");
     S().select({ type: "opening", roomId: r2.id, openingId: "nope" });
     expect(S().selection).toBeNull();
+  });
+});
+
+describe("подсветка стены из панели (hoverWallId)", () => {
+  const hover = (id: string | null = wallIds()[1]) => {
+    S().setHoverWall(id);
+    expect(S().hoverWallId).toBe(id);
+  };
+
+  it("сбрасывается при смене активной комнаты и выделении в другой комнате", () => {
+    const r1 = room();
+    S().addRoom();
+    expect(S().hoverWallId).toBeNull();
+    hover();
+    S().setActiveRoom(r1.id);
+    expect(S().hoverWallId).toBeNull();
+    hover();
+    const r2 = S().project.rooms[1];
+    S().select({ type: "wall", roomId: r2.id, wallId: r2.points[0].id });
+    expect(S().activeRoomId).toBe(r2.id);
+    expect(S().hoverWallId).toBeNull();
+    // выделение в той же комнате подсветку не трогает
+    hover();
+    S().select({ type: "point", roomId: r2.id, pointId: r2.points[2].id });
+    expect(S().hoverWallId).toBe(wallIds()[1]);
+  });
+
+  it("живёт, пока жива стена: правка другой стены — остаётся, удаление стены — сброс", () => {
+    hover(wallIds()[2]);
+    S().setWallLength(wallIds()[0], 5);
+    expect(S().hoverWallId).toBe(wallIds()[2]);
+    S().splitWall(wallIds()[0], 1);
+    const added = room().points[1].id;
+    hover(added);
+    S().removePoint(added);
+    expect(room().points.some((p) => p.id === added)).toBe(false);
+    expect(S().hoverWallId).toBeNull();
+    hover();
+    S().applyTemplate("L"); // новые точки — прежних стен нет
+    expect(S().hoverWallId).toBeNull();
+  });
+
+  it("удаление комнаты: активной — сброс, другой — подсветка остаётся", () => {
+    const r1 = room();
+    S().addRoom();
+    const r2 = room();
+    S().addRoom();
+    hover();
+    S().removeRoom(r1.id);
+    expect(S().hoverWallId).toBe(wallIds()[1]);
+    S().removeRoom(room().id);
+    expect(S().activeRoomId).toBe(r2.id);
+    expect(S().hoverWallId).toBeNull();
+  });
+
+  it("сбрасывается при undo/redo", () => {
+    S().setWallLength(wallIds()[0], 5);
+    hover();
+    S().undo();
+    expect(S().hoverWallId).toBeNull();
+    hover();
+    S().redo();
+    expect(S().hoverWallId).toBeNull();
+    // пустая история — переход не случился, подсветку не трогаем
+    hover();
+    S().redo();
+    expect(S().hoverWallId).toBe(wallIds()[1]);
+  });
+
+  it("сбрасывается при newProject и loadProject, даже если id стены совпал", () => {
+    hover();
+    S().newProject();
+    expect(S().hoverWallId).toBeNull();
+    const same = S().project;
+    hover();
+    S().loadProject({ ...same, name: "Тот же проект" });
+    expect(S().activeRoomId).toBe(same.rooms[0].id);
+    expect(S().hoverWallId).toBeNull();
+  });
+
+  it("проект подменили снаружи (другая вкладка) — select() сверяет подсветку", () => {
+    hover();
+    const r = room();
+    useAppStore.setState({
+      project: { ...S().project, rooms: [{ ...r, points: r.points.filter((p) => p.id !== wallIds()[1]) }] },
+    });
+    S().select(S().selection);
+    expect(S().hoverWallId).toBeNull();
   });
 });
 
@@ -348,12 +459,12 @@ describe("проект", () => {
     expect(S().project).not.toBe(before);
     expect(S().project.rooms).toHaveLength(1);
     S().undo();
-    expect(S().project).toBe(before);
+    expectSameVersion(S().project, before);
     const demo = createDemoProject();
     S().loadProject(demo);
     expect(S().project.rooms[0].name).toBe("Гостиная");
     expect(S().activeRoomId).toBe(demo.rooms[0].id);
-    expect(S().past[S().past.length - 1]).toBe(before);
+    expectSameVersion(S().past[S().past.length - 1], before);
   });
 
   it("initFromUrl без window — false", async () => {

@@ -19,8 +19,23 @@ import { PlanSvg } from "../plan/PlanSvg";
 import { getEstimate, getRoomMetrics } from "../state/hooks";
 import { useAppStore } from "../state/store";
 import { Icon } from "../ui/kit";
-import { USEFUL_OFFCUT, growOf } from "./CutPlan";
-import { countText, formatDateRu, joinRu, meters, pctText, pieceText, shortLen, splitPieceLabel, stockText, unitForms, wasteLen } from "./format";
+import { growOf } from "./CutPlan";
+import {
+  NBSP,
+  countText,
+  formatDateRu,
+  isUsefulOffcut,
+  joinRu,
+  meters,
+  pctText,
+  pieceText,
+  shortLen,
+  splitPieceLabel,
+  stockText,
+  typo,
+  unitForms,
+  wasteLen,
+} from "./format";
 import "./results.css";
 
 /* ------------------------------- Итог -------------------------------- */
@@ -82,11 +97,11 @@ function OrderSheetTable({ estimate }: { estimate: ProjectEstimate }) {
             <tr key={l.id}>
               <td className="rs-sheet__no">{++n}</td>
               <td>
-                {l.name}
-                {l.note ? <div className="rs-sheet__note">{l.note}</div> : null}
+                {typo(l.name)}
+                {l.note ? <div className="rs-sheet__note">{typo(l.note)}</div> : null}
               </td>
               <td className="rs-sheet__n">
-                {formatNumber(l.qty, 2, { trim: true })} {l.unit}
+                {formatNumber(l.qty, 2, { trim: true })}{NBSP}{l.unit}
               </td>
               <td className="rs-sheet__n">{formatMoney(l.unitPrice)}</td>
               <td className="rs-sheet__n">{formatMoney(l.total)}</td>
@@ -208,7 +223,7 @@ function SheetBar({ bar, no, stock, roomNo }: { bar: CutBar; no: number; stock: 
           <span className="rs-sheet__waste" style={{ flexGrow: growOf(bar.waste) }}>
             <span className="rs-sheet__t-long">
               {wasteLen(bar.waste)}
-              {bar.waste >= USEFUL_OFFCUT - 1e-9 ? " ✓" : ""}
+              {isUsefulOffcut(bar.waste) ? " ✓" : ""}
             </span>
           </span>
         ) : null}

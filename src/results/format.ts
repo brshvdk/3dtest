@@ -56,12 +56,12 @@ export function countText(n: number, forms: Forms): string {
 }
 
 /**
- * Типографика строк: неразрывный пробел между числом и единицей («80 мм», «2,5 м», «5 %»)
+ * Типографика строк: неразрывный пробел между числом и единицей («80 мм», «2,5 м», «5 %», «290 мл»)
  * и перед тире — чтобы тире не начинало строку.
  */
 export function typo(text: string): string {
   return text
-    .replace(/(\d) (мм|см|м²|м³|м|₽|%|шт|кг)(?=$|[\s,.;:)—])/g, `$1${NBSP}$2`)
+    .replace(/(\d) (мм|см|мл|м²|м³|м|₽|%|шт|кг)(?=$|[\s,.;:)—])/g, `$1${NBSP}$2`)
     .replace(/ — /g, `${NBSP}— `);
 }
 
@@ -74,11 +74,23 @@ export const stockText = (m: number): string => formatLength(m, "m", 2, { trim: 
 /** «2,00» — длина куска без единицы (для подписей на схеме раскроя). */
 export const shortLen = (m: number): string => formatNumber(m, 2);
 
+/** см: обрезок от этой длины «пригодится» (подойдёт на короткий участок). */
+export const USEFUL_OFFCUT_CM = 30;
+
 /**
- * Длина обрезка — с округлением вниз до сантиметра: обрезок 0,297 м не должен
- * выглядеть как «0,30» рядом с порогом «пригодится от 30 см».
+ * Обрезок в целых сантиметрах, всегда вниз: на обрезке не завышаем — 0,297 м это «0,29», а не «0,30».
+ * Допуск 1 мкм — только на погрешность float (2,5 − 2,2 − 0,003 = 0,29699999…).
  */
-export const wasteLen = (m: number): string => formatNumber(Math.floor(m * 100 + 1e-6) / 100, 2);
+export const offcutCm = (m: number): number => Math.max(0, Math.floor(m * 100 + 1e-4));
+
+/** «0,29» — длина обрезка без единицы, округлена вниз до сантиметра. */
+export const wasteLen = (m: number): string => formatNumber(offcutCm(m) / 100, 2);
+
+/**
+ * Обрезок «пригодится»: от 30 см по фактической длине. Считается из того же округления, что и
+ * подпись, поэтому «0,29» никогда не бывает с пометкой, а «0,30» — всегда с ней.
+ */
+export const isUsefulOffcut = (m: number): boolean => offcutCm(m) >= USEFUL_OFFCUT_CM;
 
 /** «5 %» */
 export const pctText = (v: number, digits = 1): string =>

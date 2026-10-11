@@ -5,9 +5,11 @@
 import { memo, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ThreeEvent } from "@react-three/fiber";
 import type { Group } from "three";
+import { getCorners } from "../../domain/geometry";
 import { describeOpening } from "../../domain/openings";
 import type { Opening, Room, Wall } from "../../domain/types";
 import { useAppStore } from "../../state/store";
+import { openingSides, sameSides, type OpeningSides } from "../build/sides";
 import { LOW_WALL_HEIGHT } from "../build/walls";
 import { setCanvasCursor, useScene } from "../context";
 import { useHighlight, usePalette } from "../materials";
@@ -24,6 +26,8 @@ interface ItemProps {
   wall: Wall;
   roomId: string;
   cut: number;
+  /** Место до углов комнаты (наличник и подоконник у угла подрезаются). */
+  sides: OpeningSides;
 }
 
 function sameWall(a: Wall, b: Wall): boolean {
@@ -39,7 +43,7 @@ function sameWall(a: Wall, b: Wall): boolean {
 }
 
 const OpeningItem = memo(
-  function OpeningItem({ o, wall, roomId, cut }: ItemProps) {
+  function OpeningItem({ o, wall, roomId, cut, sides }: ItemProps) {
     const { theme, clip, registry } = useScene();
     const selected = useAppStore((s) => s.selection?.type === "opening" && s.selection.openingId === o.id);
     const [hovered, setHovered] = useState(false);
@@ -82,16 +86,16 @@ const OpeningItem = memo(
     let model: JSX.Element | null = null;
     switch (o.kind) {
       case "door":
-        model = <DoorModel o={o} th={th} p={palette} />;
+        model = <DoorModel o={o} th={th} p={palette} sides={sides} />;
         break;
       case "passage":
-        model = <PassageModel o={o} th={th} p={palette} />;
+        model = <PassageModel o={o} th={th} p={palette} sides={sides} />;
         break;
       case "window":
-        model = <WindowModel o={o} th={th} p={palette} cut={cut} />;
+        model = <WindowModel o={o} th={th} p={palette} cut={cut} sides={sides} />;
         break;
       case "balcony":
-        model = <BalconyModel o={o} th={th} p={palette} cut={cut} />;
+        model = <BalconyModel o={o} th={th} p={palette} cut={cut} sides={sides} />;
         break;
       case "furniture":
         model = <FurnitureModel o={o} p={palette} maxH={cut} />;
@@ -110,23 +114,27 @@ const OpeningItem = memo(
         {/* Контур — отдельно от модели: виден, даже если стена скрыта кукольным домиком. */}
         {selected ? (
           <group position={[px, 0, pz]} rotation={[0, rot, 0]}>
-            <SelectionOutline o={o} th={wall.thickness} color={theme.primary} cut={cut} />
+            <SelectionOutline o={o} th={wall.thickness} color={theme.primary} cut={cut} sides={sides} />
           </group>
         ) : null}
       </>
     );
   },
-  (p, n) => p.o === n.o && p.roomId === n.roomId && p.cut === n.cut && sameWall(p.wall, n.wall),
+  (p, n) =>
+    p.o === n.o && p.roomId === n.roomId && p.cut === n.cut && sameWall(p.wall, n.wall) && sameSides(p.sides, n.sides),
 );
 
 export function Openings({ room, walls, mode }: { room: Room; walls: Wall[]; mode: WallMode }) {
   const byId = useMemo(() => new Map(walls.map((w) => [w.id, w])), [walls]);
+  const corners = useMemo(() => getCorners(room), [room]);
   const cut = mode === "low" ? Math.min(LOW_WALL_HEIGHT, room.height) : room.height + 1;
   return (
     <group>
       {room.openings.map((o) => {
         const w = byId.get(o.wallId);
-        return w ? <OpeningItem key={o.id} o={o} wall={w} roomId={room.id} cut={cut} /> : null;
+        if (!w) return null;
+        const sides = openingSides(walls, corners, w, o);
+        return <OpeningItem key={o.id} o={o} wall={w} roomId={room.id} cut={cut} sides={sides} />;
       })}
     </group>
   );

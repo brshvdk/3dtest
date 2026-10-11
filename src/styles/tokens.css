@@ -35,6 +35,10 @@
   --warning-weak: #fdf4e2;
   --danger: #cf3c3c;
   --danger-weak: #fcebeb;
+  /* Текст на заливке --danger (≥ 4,5:1). */
+  --on-danger: #ffffff;
+  /* Затемнение фона под модальным диалогом. */
+  --scrim: rgba(18, 19, 22, 0.42);
 
   /* План */
   --plan-bg: #f7f6f2;
@@ -106,6 +110,8 @@
     --warning-weak: rgba(240, 185, 85, 0.12);
     --danger: #ff6b6b;
     --danger-weak: rgba(255, 107, 107, 0.13);
+    --on-danger: #2b0a0a;
+    --scrim: rgba(0, 0, 0, 0.62);
     --plan-bg: #16171a;
     --plan-grid: #202226;
     --plan-grid-major: #292b30;
@@ -151,6 +157,8 @@
   --warning-weak: rgba(240, 185, 85, 0.12);
   --danger: #ff6b6b;
   --danger-weak: rgba(255, 107, 107, 0.13);
+  --on-danger: #2b0a0a;
+  --scrim: rgba(0, 0, 0, 0.62);
   --plan-bg: #16171a;
   --plan-grid: #202226;
   --plan-grid-major: #292b30;

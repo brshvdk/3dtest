@@ -21,7 +21,7 @@ import { getRoomWalls } from "../state/hooks";
 import { useAppStore } from "../state/store";
 import { toast } from "../ui/kit";
 import { hitSkirting, hitTest, type PlanTarget, type SkirtLine } from "./geom";
-import { claimSelection, selectionKey, selectOnPlan, usePlanUi, type HoverTarget } from "./planUi";
+import { claimSelection, notePlanEdit, selectionKey, selectOnPlan, usePlanUi, type HoverTarget } from "./planUi";
 import { toWorld, zoomAt, type View } from "./viewport";
 
 /** Актуальные данные рендера, нужные обработчикам (без пересоздания обработчиков). */
@@ -584,6 +584,8 @@ export function useInteraction({
       begin();
       st.moveVertex(pt.id, { x: round(pt.x + k.x * step), y: round(pt.y + k.y * step) }, { transient: true });
     }
+    // Сдвиг стрелками удался — подсказка новичку больше не нужна.
+    if (activeRoom() !== room) notePlanEdit();
   };
 
   // Отпускание клавиши — конец жеста (в т.ч. если фокус успел уйти с плана).

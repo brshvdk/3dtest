@@ -26,6 +26,8 @@ export const CLICK_TOLERANCE = 5;
 interface WallMaterials {
   inner: MeshStandardMaterial;
   innerSelected: MeshStandardMaterial;
+  /** Наведение в панелях (hoverWallId): как выделение, но слабее. */
+  innerHover: MeshStandardMaterial;
   outer: MeshStandardMaterial;
   reveal: MeshStandardMaterial;
   cap: MeshStandardMaterial;
@@ -36,6 +38,7 @@ function useWallMaterials(wallColor: string, primary: string, section: string, o
   const mats = useMemo<WallMaterials>(() => {
     const base = new Color(wallColor);
     const sel = base.clone().lerp(new Color(primary), 0.16);
+    const hov = base.clone().lerp(new Color(primary), 0.11);
     return {
       inner: new MeshStandardMaterial({ color: base, roughness: 0.94, vertexColors: true }),
       innerSelected: new MeshStandardMaterial({
@@ -44,6 +47,13 @@ function useWallMaterials(wallColor: string, primary: string, section: string, o
         vertexColors: true,
         emissive: new Color(primary),
         emissiveIntensity: 0.06,
+      }),
+      innerHover: new MeshStandardMaterial({
+        color: hov,
+        roughness: 0.92,
+        vertexColors: true,
+        emissive: new Color(primary),
+        emissiveIntensity: 0.04,
       }),
       outer: new MeshStandardMaterial({ color: outer, roughness: 0.96 }),
       reveal: new MeshStandardMaterial({ color: base.clone().multiplyScalar(0.97), roughness: 0.94 }),
@@ -66,6 +76,8 @@ interface WallItemProps {
   top: number;
   auto: boolean;
   selected: boolean;
+  /** Стену подсвечивают из панелей (наведение на поле стены). */
+  hovered: boolean;
   mats: WallMaterials;
 }
 
@@ -79,6 +91,7 @@ const WallItem = memo(function WallItem({
   top,
   auto,
   selected,
+  hovered,
   mats,
 }: WallItemProps) {
   const { registry } = useScene();
@@ -114,8 +127,14 @@ const WallItem = memo(function WallItem({
   );
 
   const material = useMemo<Material[]>(
-    () => [selected ? mats.innerSelected : mats.inner, mats.outer, mats.reveal, mats.cap, mats.threshold],
-    [selected, mats],
+    () => [
+      selected ? mats.innerSelected : hovered ? mats.innerHover : mats.inner,
+      mats.outer,
+      mats.reveal,
+      mats.cap,
+      mats.threshold,
+    ],
+    [selected, hovered, mats],
   );
 
   const fullRef = useRef<Mesh>(null);
@@ -182,6 +201,7 @@ export function Walls({ room, walls, mode }: { room: Room; walls: Wall[]; mode: 
   const selectedWall = useAppStore((s) =>
     s.selection?.type === "wall" && s.selection.roomId === room.id ? s.selection.wallId : null,
   );
+  const hoverWall = useAppStore((s) => s.hoverWallId);
   const mats = useWallMaterials(wallColor, theme.primary, theme.section, theme.outer);
   const auto = mode === "auto";
   const top = mode === "low" ? Math.min(LOW_WALL_HEIGHT, room.height) : room.height;
@@ -244,6 +264,7 @@ export function Walls({ room, walls, mode }: { room: Room; walls: Wall[]; mode: 
           top={top}
           auto={auto}
           selected={selectedWall === w.id}
+          hovered={hoverWall === w.id}
           mats={mats}
         />
       ))}

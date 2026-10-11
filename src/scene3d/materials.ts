@@ -4,7 +4,7 @@
  */
 import { useEffect, useMemo } from "react";
 import { useThree } from "@react-three/fiber";
-import { Color, DoubleSide, MeshStandardMaterial, type Plane } from "three";
+import { Color, DoubleSide, MeshStandardMaterial, type HSL, type Plane } from "three";
 import type { SkirtingMaterial } from "../domain/types";
 
 export interface Palette {
@@ -105,4 +105,21 @@ export function skirtingSurface(material: SkirtingMaterial): { roughness: number
     case "ceramic":
       return { roughness: 0.2, metalness: 0 };
   }
+}
+
+/**
+ * Материал фурнитуры (уголки, заглушки, соединители): цвет плинтуса, но
+ * другой партии — тон чуть сдвинут, поверхность матовее, как у литых деталей.
+ */
+export function createFittingMaterial(color: string, material: SkirtingMaterial): MeshStandardMaterial {
+  const surf = skirtingSurface(material);
+  const c = new Color(color);
+  const hsl: HSL = { h: 0, s: 0, l: 0 };
+  c.getHSL(hsl);
+  c.setHSL(hsl.h, hsl.s * 0.9, hsl.l > 0.5 ? hsl.l - 0.035 : hsl.l + 0.035);
+  return new MeshStandardMaterial({
+    color: c,
+    roughness: Math.min(0.92, surf.roughness + 0.16),
+    metalness: surf.metalness * 0.8,
+  });
 }

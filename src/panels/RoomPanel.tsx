@@ -3,15 +3,23 @@
  * толщина стен, сводка (площадь, периметр, объём, площадь стен).
  * Все правки — через стор; поля длины синхронны с перетаскиванием на плане.
  */
-import { memo, useCallback, useEffect, useId, useMemo, useRef, type PointerEvent } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  type FocusEvent,
+  type PointerEvent,
+} from "react";
 import { ROOM_HEIGHT_RANGE, WALL_THICKNESS_RANGE } from "../domain/project";
 import { MIN_WALL } from "../domain/roomEdit";
 import { ROOM_NAME_SUGGESTIONS, ROOM_TEMPLATES, buildTemplatePoints } from "../domain/roomTemplates";
 import type { Point, Room, RoomShapeId, Wall } from "../domain/types";
 import { formatArea, formatLength, formatVolume, plural } from "../domain/units";
-import { usePlanUi } from "../plan/planUi";
 import { useActiveRoom, useRoomMetrics, useWalls } from "../state/hooks";
-import { useAppStore, type Selection } from "../state/store";
+import { useAppStore } from "../state/store";
 import {
   Disclosure,
   Icon,
@@ -20,14 +28,20 @@ import {
   Section,
   Switch,
   TextField,
+  confirmAction,
+  rovingFocusIndex,
 } from "../ui/kit";
 import { notify } from "./notify";
+import { rovingFocusKeyDown } from "./roving";
 import { ShapeIcon } from "./ShapeIcon";
 import "./panels.css";
 
-/** Короткие подписи карточек (полное описание — во всплывающей подсказке). */
+/**
+ * Короткие подписи карточек (полное описание — во всплывающей подсказке).
+ * Без мягких переносов: слово не рвётся по слогам, «Г‑образная» — с неразрывным дефисом.
+ */
 const SHAPE_LABEL: Record<RoomShapeId, string> = {
-  rect: "Прямо\u00ADугольная",
+  rect: "Прямоугольная",
   L: "Г\u2011образная",
   U: "П\u2011образная",
   T: "Т\u2011образная",
@@ -36,6 +50,12 @@ const SHAPE_LABEL: Record<RoomShapeId, string> = {
   trapezoid: "Скошенная",
   custom: "Своя",
 };
+
+/** Как вернуть удалённое: сочетание клавиш — только там, где есть клавиатура и мышь. */
+function undoHint(): string {
+  const fine = typeof matchMedia === "function" && matchMedia("(pointer: fine)").matches;
+  return fine ? "Вернуть можно кнопкой «Отменить» (Ctrl+Z)." : "Вернуть можно кнопкой «Отменить».";
+}
 
 /** Максимальная длина стены в поле ввода, м. */
 const MAX_WALL_INPUT = 50;
@@ -94,16 +114,32 @@ const RoomNameSection = memo(function RoomNameSection({
   roomsCount: number;
 }) {
   const listId = useId();
+  const dupId = useId();
   const onRename = useCallback((v: string) => useAppStore.getState().renameRoom(roomId, v), [roomId]);
   const onDuplicate = () => {
     useAppStore.getState().duplicateRoom(roomId);
     notify(`Создана копия комнаты «${name}»`);
   };
-  const onRemove = () => {
+  const onRemove = async () => {
     if (roomsCount <= 1) return;
-    if (!window.confirm(`Удалить комнату «${name}»?\nВернуть можно кнопкой «Отменить» (Ctrl+Z).`)) return;
-    useAppStore.getState().removeRoom(roomId);
+    const ok = await confirmAction({
+      title: `Удалить комнату «${name}»?`,
+      message: `Комната со всеми дверями, окнами и мебелью пропадёт из проекта и расчёта. ${undoHint()}`,
+      confirmLabel: "Удалить",
+      tone: "danger",
+    });
+    // Пока диалог был открыт, комнату могли удалить или она осталась последней.
+    const s = useAppStore.getState();
+    if (!ok || s.project.rooms.length <= 1 || !s.project.rooms.some((r) => r.id === roomId)) return;
+    s.removeRoom(roomId);
     notify(`Комната «${name}» удалена`, "info");
+    // Осталась одна комната — кнопка удаления выключена и фокус с неё слетает на <body>.
+    requestAnimationFrame(() => {
+      const a = document.activeElement;
+      if (!a || a === document.body || (a instanceof HTMLButtonElement && a.disabled)) {
+        document.getElementById(dupId)?.focus();
+      }
+    });
   };
 
   return (
@@ -113,7 +149,7 @@ const RoomNameSection = memo(function RoomNameSection({
       subtitle="Название, форма и размеры"
       actions={
         <>
-          <IconButton icon="copy" label="Дублировать комнату" size="sm" onClick={onDuplicate} />
+          <IconButton id={dupId} icon="copy" label="Дублировать комнату" size="sm" onClick={onDuplicate} />
           <IconButton
             icon="trash"
             label={roomsCount <= 1 ? "Единственную комнату удалить нельзя" : "Удалить комнату"}
@@ -191,26 +227,32 @@ const ShapeSection = memo(function ShapeSection({
   /** Только для своей формы — иначе секция не перерисовывается при правке стен. */
   points?: Point[];
 }) {
-  const apply = (id: RoomShapeId) => {
+  const apply = async (id: RoomShapeId) => {
     if (id === shape) return;
     const room = getActiveRoom();
-    if (
-      room.openings.length > 0 &&
-      templateWallCount(id) !== room.points.length &&
-      !window.confirm(
-        `У этой формы другое число стен. Двери и окна будут расставлены заново, а те, что не поместятся, — удалены.\n\nПродолжить?`,
-      )
-    ) {
-      return;
+    if (room.openings.length > 0 && templateWallCount(id) !== room.points.length) {
+      const name = ROOM_TEMPLATES.find((t) => t.id === id)?.name ?? SHAPE_LABEL[id];
+      const ok = await confirmAction({
+        title: "Сменить форму комнаты?",
+        message: `У формы «${name}» другое число стен. Двери и окна расставим заново, а те, что не поместятся, удалим. ${undoHint()}`,
+        confirmLabel: "Сменить форму",
+        tone: "primary",
+      });
+      // Пока диалог был открыт, могли переключить комнату или уже сменить форму.
+      const now = getActiveRoom();
+      if (!ok || now.id !== room.id || now.shape === id) return;
     }
-    const before = room.openings.length;
-    useAppStore.getState().applyTemplate(id, paramsFromRoom(room, id));
+    const current = getActiveRoom();
+    const before = current.openings.length;
+    useAppStore.getState().applyTemplate(id, paramsFromRoom(current, id));
     const lost = before - getActiveRoom().openings.length;
     if (lost === 1) notify("Один проём не поместился в новую форму и удалён", "warning");
     else if (lost > 1) notify(`${plural(lost, ["проём", "проёма", "проёмов"])} не поместились в новую форму и удалены`, "warning");
   };
 
   const isCustom = shape === "custom";
+  // Одна остановка Tab на группу: выбранная форма (своя — статичная карточка).
+  const focusIndex = isCustom ? -1 : rovingFocusIndex(ROOM_TEMPLATES, (t) => t.id === shape);
   return (
     <Section
       title="Форма комнаты"
@@ -220,23 +262,30 @@ const ShapeSection = memo(function ShapeSection({
           : "Выберите похожую, точные размеры — ниже"
       }
     >
-      <div className="pn-shapes" role="radiogroup" aria-label="Форма комнаты">
-        {ROOM_TEMPLATES.map((t) => (
+      <div className="pn-shapes" role="radiogroup" aria-label="Форма комнаты" onKeyDown={rovingFocusKeyDown}>
+        {ROOM_TEMPLATES.map((t, i) => (
           <button
             key={t.id}
             type="button"
             role="radio"
             aria-checked={t.id === shape}
+            tabIndex={i === focusIndex ? 0 : -1}
             className={`pn-shape-card${t.id === shape ? " is-active" : ""}`}
             title={`${t.name}. ${t.description}`}
-            onClick={() => apply(t.id)}
+            onClick={() => void apply(t.id)}
           >
             <ShapeIcon shape={t.id} size={34} />
             <span className="pn-shape-card__label">{SHAPE_LABEL[t.id]}</span>
           </button>
         ))}
         {isCustom ? (
-          <div className="pn-shape-card is-active is-static" role="radio" aria-checked title="Форма изменена на плане">
+          <div
+            className="pn-shape-card is-active is-static"
+            role="radio"
+            aria-checked
+            tabIndex={0}
+            title="Форма изменена на плане"
+          >
             <ShapeIcon shape="custom" points={points} size={34} />
             <span className="pn-shape-card__label">{SHAPE_LABEL.custom}</span>
           </div>
@@ -261,56 +310,77 @@ const ShapeSection = memo(function ShapeSection({
 /* ---------------------------- Размеры ----------------------------- */
 
 /**
- * Наведение мышью на поле стены подсвечивает её на плане так же, как наведение
- * на сам план: выделение и вид не меняются (иначе план сдвигается к стене, а
- * Delete и стрелки получают случайную цель). Фокус выделяет стену насовсем.
+ * Наведение и фокус на строку стены подсвечивают её на плане и в 3D
+ * (hoverWallId в сторе): выделение и вид не меняются, иначе план сдвигается
+ * к стене, а Delete и стрелки получают случайную цель. Выделить стену —
+ * клик по её букве.
  */
-function useWallHighlight(roomId: string) {
-  /** Стена, подсвеченная отсюда, — снять подсветку, если панель закроют, пока указатель над строкой. */
-  const hovered = useRef<string | null>(null);
+function useWallHover(roomId: string) {
+  /** Стена под указателем и стена с фокусом, плюс что мы сами поставили в стор. */
+  const st = useRef<{ pointer: string | null; focus: string | null; mine: string | null }>({
+    pointer: null,
+    focus: null,
+    mine: null,
+  });
   const hl = useMemo(() => {
-    const isSelected = (s: Selection, wallId: string) => s?.type === "wall" && s.wallId === wallId;
-    // Касание тоже присылает pointerenter, а pointerleave — только при следующем касании:
-    // подсветка «залипла» бы; на сенсорном экране стену выделяет фокус поля.
-    const isMouse = (e: PointerEvent) => e.pointerType !== "touch";
-    const clear = (wallId: string) => {
-      if (hovered.current !== wallId) return;
-      hovered.current = null;
-      const u = usePlanUi.getState();
-      if (u.hover?.type === "wall" && u.hover.id === wallId) u.setHover(null, u.inRoom);
+    const sync = () => {
+      const cur = st.current;
+      const want = cur.pointer ?? cur.focus;
+      const s = useAppStore.getState();
+      if (want) s.setHoverWall(want);
+      // Снимаем только свою подсветку: её мог поставить другой источник (план, итог).
+      else if (cur.mine && s.hoverWallId === cur.mine) s.setHoverWall(null);
+      cur.mine = want;
     };
+    // Касание тоже присылает pointerenter, а pointerleave — только при следующем касании:
+    // подсветка «залипла» бы; на сенсорном экране подсвечивает фокус поля.
+    const isMouse = (e: PointerEvent) => e.pointerType !== "touch";
     return {
       enter(wallId: string, e: PointerEvent) {
         if (!isMouse(e)) return;
-        hovered.current = wallId;
-        const u = usePlanUi.getState();
-        u.setHover({ type: "wall", id: wallId }, u.inRoom);
+        st.current.pointer = wallId;
+        sync();
       },
       leave(wallId: string, e: PointerEvent) {
-        if (isMouse(e)) clear(wallId);
+        if (!isMouse(e) || st.current.pointer !== wallId) return;
+        st.current.pointer = null;
+        sync();
       },
       focus(wallId: string) {
-        const s = useAppStore.getState();
-        if (!isSelected(s.selection, wallId)) s.select({ type: "wall", roomId, wallId });
+        st.current.focus = wallId;
+        sync();
       },
-      clear,
+      blur(wallId: string, e: FocusEvent<HTMLElement>) {
+        // Фокус переходит внутри строки (поле → кнопка буквы) — подсветка остаётся.
+        if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+        if (st.current.focus !== wallId) return;
+        st.current.focus = null;
+        sync();
+      },
+      reset() {
+        st.current.pointer = null;
+        st.current.focus = null;
+        sync();
+      },
     };
-  }, [roomId]);
-  useEffect(
-    () => () => {
-      if (hovered.current) hl.clear(hovered.current);
-    },
-    [hl],
-  );
+  }, []);
+  // Другая комната или панель закрыта, пока указатель над строкой, — снять подсветку.
+  useEffect(() => () => hl.reset(), [hl, roomId]);
   return hl;
 }
 
-type WallHighlight = ReturnType<typeof useWallHighlight>;
+type WallHover = ReturnType<typeof useWallHover>;
+
+/** Выделить стену на плане (как клик по ней). */
+const selectWall = (roomId: string, wallId: string) => {
+  const s = useAppStore.getState();
+  if (!(s.selection?.type === "wall" && s.selection.wallId === wallId)) s.select({ type: "wall", roomId, wallId });
+};
 
 const SizesSection = memo(function SizesSection({ room }: { room: Room }) {
   const walls = useWalls();
   const selectedWallId = useAppStore((s) => (s.selection?.type === "wall" ? s.selection.wallId : null));
-  const hl = useWallHighlight(room.id);
+  const hl = useWallHover(room.id);
   const isRect = room.shape === "rect" && walls.length === 4;
 
   return (
@@ -336,7 +406,7 @@ const SizesSection = memo(function SizesSection({ room }: { room: Room }) {
       ) : (
         <div className="pn-walls">
           {walls.map((w) => (
-            <WallRow key={w.id} wall={w} selected={selectedWallId === w.id} hl={hl} />
+            <WallRow key={w.id} wall={w} roomId={room.id} selected={selectedWallId === w.id} hl={hl} />
           ))}
         </div>
       )}
@@ -389,7 +459,7 @@ const WallField = memo(function WallField({
   wall: Wall;
   label: string;
   selected: boolean;
-  hl: WallHighlight;
+  hl: WallHover;
 }) {
   return (
     <div
@@ -397,6 +467,7 @@ const WallField = memo(function WallField({
       onPointerEnter={(e) => hl.enter(wall.id, e)}
       onPointerLeave={(e) => hl.leave(wall.id, e)}
       onFocus={() => hl.focus(wall.id)}
+      onBlur={(e) => hl.blur(wall.id, e)}
     >
       <LengthField
         label={label}
@@ -412,12 +483,14 @@ const WallField = memo(function WallField({
 
 const WallRow = memo(function WallRow({
   wall,
+  roomId,
   selected,
   hl,
 }: {
   wall: Wall;
+  roomId: string;
   selected: boolean;
-  hl: WallHighlight;
+  hl: WallHover;
 }) {
   return (
     <div
@@ -425,10 +498,20 @@ const WallRow = memo(function WallRow({
       onPointerEnter={(e) => hl.enter(wall.id, e)}
       onPointerLeave={(e) => hl.leave(wall.id, e)}
       onFocus={() => hl.focus(wall.id)}
+      onBlur={(e) => hl.blur(wall.id, e)}
     >
-      <span className="pn-wallrow__badge" aria-hidden>
+      {/* Буква — быстрый выбор стены мышью; с клавиатуры стену выбирают на плане,
+          поэтому кнопка не добавляет лишнюю остановку Tab в списке стен. */}
+      <button
+        type="button"
+        className="pn-wallrow__badge"
+        tabIndex={-1}
+        aria-label={`Выделить стену ${wall.label} на плане`}
+        title={selected ? `Стена ${wall.label} выделена на плане` : `Выделить стену ${wall.label} на плане`}
+        onClick={() => selectWall(roomId, wall.id)}
+      >
         {wall.label}
-      </span>
+      </button>
       <LengthField
         className="pn-wallrow__field"
         ariaLabel={`Длина стены ${wall.label}`}

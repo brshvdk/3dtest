@@ -1,49 +1,50 @@
 /**
- * Несколько вкладок с Меркой: правка в одной вкладке подхватывается в
- * остальных (событие storage по ключу стора), а не затирается их следующей
- * записью. Прежняя версия этой вкладки остаётся в истории — «Отменить».
+ * Несколько вкладок с Меркой: правка в одной вкладке — в том числе «Отменить»
+ * и «Повторить» — подхватывается в остальных (событие storage), а не
+ * затирается их следующей записью. Прежняя версия этой вкладки остаётся в
+ * истории — «Отменить». Как отличаем свежую правку от эха — см. tabSync.ts.
  */
 import { useEffect } from "react";
-import { migrateProject } from "../domain/project";
+import type { Project } from "../domain/types";
 import { HISTORY_LIMIT, useAppStore } from "../state/store";
 import { toast } from "../ui/kit";
+import { createTabSync } from "./tabSync";
 
-/** Ключ persist-хранилища стора (src/state/store.ts). */
-const STORE_KEY = "merka:v1";
 /** Не чаще одного уведомления за столько мс (другая вкладка пишет сериями). */
 const TOAST_EVERY_MS = 10_000;
+
+function getStorage(): Storage | null {
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
 
 export function useCrossTabSync() {
   useEffect(() => {
     let lastToast = 0;
-    const onStorage = (e: StorageEvent) => {
-      if (e.key !== STORE_KEY || !e.newValue) return;
-      let raw: unknown;
-      try {
-        raw = (JSON.parse(e.newValue) as { state?: { project?: unknown } })?.state?.project;
-      } catch {
-        return;
-      }
-      const incoming = migrateProject(raw);
-      if (!incoming) return;
-      const s = useAppStore.getState();
-      // Та же или более старая версия того же проекта — ничего не делаем. Другая вкладка
-      // сохраняет принятый от нас проект, и это эхо может прийти позже нашей следующей
-      // правки (таймеры фоновой вкладки замедлены): принять его — откатить свою правку
-      // и запустить пинг-понг между вкладками.
-      if (incoming.id === s.project.id && incoming.updatedAt <= s.project.updatedAt) return;
+    /** Проект меняем мы сами (принят из другой вкладки) — это не своя правка. */
+    let applying = false;
 
+    const apply = (incoming: Project) => {
+      const s = useAppStore.getState();
       const activeRoomId = incoming.rooms.some((r) => r.id === s.activeRoomId)
         ? s.activeRoomId
         : incoming.rooms[0].id;
-      useAppStore.setState({
-        project: incoming,
-        activeRoomId,
-        past: [...s.past, s.project].slice(-HISTORY_LIMIT),
-        future: [],
-      });
-      // Выделение могло ссылаться на удалённую стену или проём — стор его проверит.
-      useAppStore.getState().select(s.selection);
+      applying = true;
+      try {
+        useAppStore.setState({
+          project: incoming,
+          activeRoomId,
+          past: [...s.past, s.project].slice(-HISTORY_LIMIT),
+          future: [],
+        });
+        // Выделение могло ссылаться на удалённую стену или проём — стор его проверит.
+        useAppStore.getState().select(s.selection);
+      } finally {
+        applying = false;
+      }
 
       const now = Date.now();
       if (now - lastToast > TOAST_EVERY_MS) {
@@ -53,7 +54,30 @@ export function useCrossTabSync() {
         });
       }
     };
+
+    const sync = createTabSync({
+      tab: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`,
+      storage: getStorage(),
+      current: () => useAppStore.getState().project,
+      apply,
+    });
+
+    const unsubscribe = useAppStore.subscribe((s, prev) => {
+      if (!applying && s.project !== prev.project) sync.authored(s.project);
+    });
+    const onStorage = (e: StorageEvent) => sync.onStorage(e.key, e.newValue);
+    const onHide = () => {
+      if (document.visibilityState === "hidden") sync.flush();
+    };
     window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    window.addEventListener("pagehide", sync.flush);
+    document.addEventListener("visibilitychange", onHide);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("pagehide", sync.flush);
+      document.removeEventListener("visibilitychange", onHide);
+      sync.dispose();
+    };
   }, []);
 }

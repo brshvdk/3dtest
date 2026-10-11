@@ -6,6 +6,8 @@ import {
   forwardRef,
   useEffect,
   useId,
+  useLayoutEffect,
+  useReducer,
   useRef,
   useState,
   type ButtonHTMLAttributes,
@@ -254,8 +256,10 @@ interface BaseNumericProps {
 
 /**
  * Поле длины. value — метры; показывается в unit. Понимает ввод «4,2»,
- * «420 см», «4 м 20 см». Применяет значение по Enter/blur, стрелки ↑/↓
- * меняют на step (в единицах unit, Shift — ×10).
+ * «420 см», «4 м 20 см». Применяет значение по Enter (фокус остаётся в поле;
+ * на сенсорном устройстве — выходит из него) и при уходе из поля; Esc
+ * отменяет напечатанное, второй Esc — выход. Стрелки ↑/↓ меняют на step
+ * (в единицах unit, Shift — ×10).
  */
 export function LengthField({
   value,
@@ -338,6 +342,11 @@ export function NumberField({
   );
 }
 
+/** Устройство без мыши и наведения (телефон, планшет): ввод — экранной клавиатурой. */
+function isTouchOnly(): boolean {
+  return typeof window !== "undefined" && !!window.matchMedia?.("(hover: none) and (pointer: coarse)").matches;
+}
+
 function NumericInput({
   id,
   label,
@@ -375,11 +384,34 @@ function NumericInput({
   // Фокус пришёл кликом: mouseup не должен снять выделение текста (см. onMouseUp).
   const keepSelectionRef = useRef(false);
 
-  // Внешнее значение меняется (перетаскивание на плане, стрелки) — обновляем
-  // черновик, если пользователь сейчас не печатает.
-  useEffect(() => {
+  // Выделить текст, когда в поле окажется применённое значение (после Enter/Esc).
+  const selectPendingRef = useRef(false);
+  const [, rerender] = useReducer((n: number) => n + 1, 0);
+
+  // Внешнее значение меняется (перетаскивание на плане, стрелки, применённый
+  // Enter) — обновляем черновик, если пользователь сейчас не печатает. До
+  // отрисовки: иначе после Enter на кадр-другой мелькало прежнее значение.
+  useLayoutEffect(() => {
     if (!focused || !dirtyRef.current) setDraft(text);
   }, [text, focused]);
+
+  // Выделяем, только когда в поле уже новое значение: смена value из React
+  // сбрасывает выделение, а select() на ушедшем поле вернул бы в него фокус.
+  useLayoutEffect(() => {
+    if (!selectPendingRef.current) return;
+    const el = ref.current;
+    if (!el || document.activeElement !== el) {
+      selectPendingRef.current = false;
+      return;
+    }
+    if (el.value !== text) return;
+    selectPendingRef.current = false;
+    el.select();
+  });
+  const selectWhenSynced = () => {
+    selectPendingRef.current = true;
+    rerender();
+  };
 
   const commit = () => {
     if (!dirtyRef.current) return;
@@ -399,19 +431,24 @@ function NumericInput({
       // Применяем и остаёмся в поле (фокус не улетает на <body>) — удобно
       // поправить ещё раз; текст выделяется для следующего ввода.
       commit();
+      // Значение не изменилось (или не разобралось) — вернуть его текст; новое
+      // придёт в text, и черновик обновится сам.
       setDraft(text);
-      const el = ref.current;
-      requestAnimationFrame(() => {
-        if (el && document.activeElement === el) el.select();
-      });
+      if (isTouchOnly()) {
+        // Телефон/планшет без мыши: Enter — это «Готово» экранной клавиатуры.
+        // Применяем и выходим из поля: клавиатура прячется, план снова виден.
+        skipBlurRef.current = true;
+        ref.current?.blur();
+        return;
+      }
+      selectWhenSynced();
     } else if (e.key === "Escape") {
       if (dirtyRef.current) {
         // Первый Esc — отменить напечатанное, оставаясь в поле.
         e.stopPropagation();
         dirtyRef.current = false;
         setDraft(text);
-        const el = ref.current;
-        requestAnimationFrame(() => el?.select());
+        selectWhenSynced();
       } else {
         // Правок нет — выходим из поля; событие идёт дальше (закрыть панель и т.п.).
         skipBlurRef.current = true;
@@ -437,6 +474,7 @@ function NumericInput({
         id={inputId}
         type="text"
         inputMode="decimal"
+        enterKeyHint="done"
         autoComplete="off"
         spellCheck={false}
         value={focused ? draft : text}
@@ -472,6 +510,8 @@ function NumericInput({
         }}
         onChange={(e) => {
           dirtyRef.current = true;
+          // Пользователь уже печатает — отложенное выделение больше не нужно.
+          selectPendingRef.current = false;
           setDraft(e.target.value);
         }}
         onKeyDown={onKeyDown}

@@ -98,14 +98,15 @@ interface Shape {
 }
 
 function sameLabel(
-  p: { wall: Wall; top: number; selected: boolean },
-  n: { wall: Wall; top: number; selected: boolean },
+  p: { wall: Wall; top: number; selected: boolean; hovered: boolean },
+  n: { wall: Wall; top: number; selected: boolean; hovered: boolean },
 ): boolean {
   const a = p.wall;
   const b = n.wall;
   return (
     p.top === n.top &&
     p.selected === n.selected &&
+    p.hovered === n.hovered &&
     a.id === b.id &&
     a.label === b.label &&
     a.length === b.length &&
@@ -121,12 +122,15 @@ const Label = memo(function Label({
   wall,
   top,
   selected,
+  hovered,
   shape,
   chips,
 }: {
   wall: Wall;
   top: number;
   selected: boolean;
+  /** Стену подсвечивают из панелей (hoverWallId). */
+  hovered: boolean;
   /** Ссылка, а не значение: перетаскивание чужой стены не перерисовывает подпись. */
   shape: MutableRefObject<Shape>;
   chips: Chips;
@@ -174,7 +178,7 @@ const Label = memo(function Label({
     // Текст сменился — без ResizeObserver перемерим в кадре.
     if (!chips.measured) slot.w = 0;
     invalidate();
-  }, [slot, chips, selected, wall.length, wall.label, wall.normalOut.x, wall.normalOut.y, invalidate]);
+  }, [slot, chips, selected, hovered, wall.length, wall.label, wall.normalOut.x, wall.normalOut.y, invalidate]);
 
   const { x: mx, z: mz } = labelAnchor(wall);
 
@@ -209,7 +213,7 @@ const Label = memo(function Label({
         center
         zIndexRange={[4, 0]}
         pointerEvents="none"
-        className={`s3d-wall-label${selected ? " is-selected" : ""}`}
+        className={`s3d-wall-label${selected ? " is-selected" : hovered ? " is-hover" : ""}`}
       >
         <b>{wall.label}</b>
         <span className="s3d-wall-label__dot" aria-hidden>
@@ -336,6 +340,7 @@ export function WallLabels({
   const selectedWall = useAppStore((s) =>
     s.selection?.type === "wall" && s.selection.roomId === roomId ? s.selection.wallId : null,
   );
+  const hoverWall = useAppStore((s) => s.hoverWallId);
   const invalidate = useThree((s) => s.invalidate);
   const shape = useRef<Shape>({ points, ceiling });
   shape.current = { points, ceiling };
@@ -345,7 +350,15 @@ export function WallLabels({
   return (
     <group>
       {walls.map((w) => (
-        <Label key={w.id} wall={w} top={top} selected={selectedWall === w.id} shape={shape} chips={chips} />
+        <Label
+          key={w.id}
+          wall={w}
+          top={top}
+          selected={selectedWall === w.id}
+          hovered={hoverWall === w.id}
+          shape={shape}
+          chips={chips}
+        />
       ))}
     </group>
   );

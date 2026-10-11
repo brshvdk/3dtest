@@ -56,7 +56,7 @@ export function Header() {
 
   const recent = archive.filter((e) => e.project.id !== projectId);
   const menu: MenuEntry[] = [
-    { id: "new", label: "Новый проект", icon: "file-new", onSelect: startNewProject },
+    { id: "new", label: "Новый проект", icon: "file-new", onSelect: () => void startNewProject() },
     { id: "rename", label: "Переименовать проект", icon: "edit", onSelect: () => setEditing(true) },
     ...(isMobile
       ? ([

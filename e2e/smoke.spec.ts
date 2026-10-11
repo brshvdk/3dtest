@@ -110,3 +110,98 @@ test("стрелки двигают стену сразу после клика 
   await page.keyboard.press("ArrowRight");
   await expect(field).toHaveValue("4,51");
 });
+
+test("удаление комнаты спрашивает подтверждение: «Отмена», Esc и «Удалить»", async ({ page }) => {
+  await fresh(page);
+  const rooms = page.getByRole("tablist", { name: "Комнаты" }).getByRole("tab");
+  await expect(rooms).toHaveCount(1);
+  await page.getByRole("button", { name: "Добавить комнату" }).click();
+  await expect(rooms).toHaveCount(2);
+  await page.getByRole("tablist", { name: "Шаги" }).getByRole("tab", { name: /Комната/ }).click();
+
+  const remove = page.getByRole("button", { name: "Удалить комнату" });
+  const dialog = page.getByRole("alertdialog", { name: /Удалить комнату/ });
+
+  // «Отмена»: комната на месте, фокус вернулся на кнопку удаления
+  await remove.click();
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Удалить" })).toBeFocused();
+  await dialog.getByRole("button", { name: "Отмена" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(rooms).toHaveCount(2);
+  await expect(remove).toBeFocused();
+
+  // Esc — тоже отмена; горячие клавиши приложения под диалогом не срабатывают
+  await remove.click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press("Control+z");
+  await expect(rooms).toHaveCount(2);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(rooms).toHaveCount(2);
+
+  // «Удалить»: комната удалена, последнюю удалить нельзя
+  await remove.click();
+  await dialog.getByRole("button", { name: "Удалить" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(rooms).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Единственную комнату удалить нельзя" })).toBeDisabled();
+});
+
+test("Enter в поле длины применяет значение; фокус остаётся в поле (на телефоне — клавиатура прячется)", async ({
+  page,
+  isMobile,
+}) => {
+  await fresh(page);
+  const field = page.getByLabel("Длина (стена A)");
+  await field.click();
+  await page.keyboard.type("5");
+  await page.keyboard.press("Enter");
+  await expect(field).toHaveValue("5,00");
+
+  if (isMobile) {
+    // Enter экранной клавиатуры («Готово») — применить и выйти из поля.
+    await expect(field).not.toBeFocused();
+    await expect(field).toHaveValue("5,00");
+    return;
+  }
+  await expect(field).toBeFocused();
+  // Текст выделен — следующий ввод заменяет его целиком.
+  await expect.poll(() => field.evaluate((el: HTMLInputElement) => el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0))).toBe("5,00");
+  await page.keyboard.type("6");
+  await page.keyboard.press("Enter");
+  await expect(field).toHaveValue("6,00");
+  await expect(field).toBeFocused();
+  // Esc с напечатанным — отмена ввода (остаёмся в поле), второй Esc — выход из поля.
+  await page.keyboard.type("9");
+  await page.keyboard.press("Escape");
+  await expect(field).toHaveValue("6,00");
+  await expect(field).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(field).not.toBeFocused();
+  await expect(field).toHaveValue("6,00");
+});
+
+test("правка, «Отменить» и «Повторить» в одной вкладке доходят до другой", async ({ page, context }) => {
+  await fresh(page);
+  const other = await context.newPage();
+  await other.goto("/");
+  const items = (p: Page) => p.getByRole("list", { name: "Проёмы комнаты" }).getByRole("listitem");
+  for (const p of [page, other]) await p.getByRole("tab", { name: /Проёмы/ }).click();
+  const n0 = await items(page).count();
+  await expect(items(other)).toHaveCount(n0);
+
+  await page.bringToFront();
+  await page.getByRole("button", { name: /^Окно$/ }).first().click();
+  await expect(items(other)).toHaveCount(n0 + 1);
+  await page.getByRole("button", { name: "Отменить (Ctrl+Z)" }).click();
+  await expect(items(other)).toHaveCount(n0);
+  await page.getByRole("button", { name: "Повторить (Ctrl+Shift+Z)" }).click();
+  await expect(items(other)).toHaveCount(n0 + 1);
+
+  // И обратно: отмена во второй вкладке возвращает первую.
+  await other.bringToFront();
+  await other.getByRole("button", { name: "Отменить (Ctrl+Z)" }).click();
+  await expect(items(page)).toHaveCount(n0);
+  await expect(items(other)).toHaveCount(n0);
+});

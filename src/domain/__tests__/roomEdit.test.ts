@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  cornerAt,
   getCorners,
   getWalls,
   polygonArea,
   polygonPerimeter,
   signedArea,
 } from "../geometry";
-import { createOpening, footprint } from "../openings";
+import { createOpening, footprint, getPreset } from "../openings";
+import { createRoom } from "../project";
 import {
+  DOORWAY_CLEARANCE,
+  FREE_GAP,
   MIN_WALL,
   addOpening,
   applyTemplate,
@@ -28,7 +32,7 @@ import {
   splitWall,
   updateOpening,
 } from "../roomEdit";
-import type { Opening, Room } from "../types";
+import type { Opening, OpeningKind, Room, RoomShapeId } from "../types";
 
 function mk(pts: Array<[number, number]>, openings: Opening[] = []): Room {
   return {
@@ -381,8 +385,18 @@ describe("findFreeSpot", () => {
     expect(x).not.toBeNull();
     const probe = { ...door("p0", x, "probe") };
     expect(overlaps(probe, r.openings[0])).toBe(false);
-    // ближайшее к центру свободное место — справа: 2.41 + 0.05 + 0.04
-    expect(x).toBeCloseTo(2.5);
+    // ближайшее к центру свободное место — справа, с желательным зазором
+    // 30 см (без «огрызка» плинтуса): 2.41 + 0.3 + 0.04
+    expect(x).toBeCloseTo(2.75);
+  });
+  it("если с зазором 30 см места нет — довольствуется FREE_GAP", () => {
+    // стена 4 м: дверь занимает 1.46–2.41, справа свободно 1.59 м — проём
+    // 1,3 м с наличниками и зазором 30 см не влезает, с зазором 5 см — влезает.
+    const r = mk(RECT, [door("p0", 1.5)]);
+    const x = findFreeSpot(r, "p0", 1.3, true, { extension: 0.04, near: 3 })!;
+    expect(x).not.toBeNull();
+    expect(x).toBeGreaterThanOrEqual(2.41 + 0.05 + 0.04 - 1e-9);
+    expect(x).toBeLessThan(2.41 + 0.3 + 0.04);
   });
   it("нет места — null", () => {
     const r = mk(RECT, [door("p1", 1.0)]);
@@ -477,6 +491,143 @@ describe("addOpening", () => {
     for (const a of room.openings)
       for (const b of room.openings) if (a !== b) expect(overlaps(a, b)).toBe(false);
   });
+});
+
+describe("addOpening: мебель и проёмы соседних стен", () => {
+  /**
+   * Проёмы, которые мебель f загораживает боковиной: у внутреннего угла мебель
+   * ближе DOORWAY_CLEARANCE, а дверь/проход/балкон соседней стены ближе к углу,
+   * чем глубина мебели + зазор. Считается независимо от roomEdit.
+   */
+  function blockedBy(room: Room, f: Opening): Opening[] {
+    const walls = getWalls(room);
+    const n = walls.length;
+    const w = walls.find((x) => x.id === f.wallId)!;
+    const out: Opening[] = [];
+    const ends = [
+      { gapToCorner: f.offset, corner: w.index, adj: walls[(w.index - 1 + n) % n], adjAtEnd: true },
+      { gapToCorner: w.length - f.offset - f.width, corner: (w.index + 1) % n, adj: walls[(w.index + 1) % n], adjAtEnd: false },
+    ];
+    for (const e of ends) {
+      if (e.gapToCorner >= DOORWAY_CLEARANCE - 1e-6 || cornerAt(room, e.corner).kind !== "inner") continue;
+      const reach = f.depth + FREE_GAP;
+      for (const x of room.openings) {
+        if (x.wallId !== e.adj.id || !["door", "passage", "balcony"].includes(x.kind)) continue;
+        const fp = footprint(x);
+        const near = e.adjAtEnd ? e.adj.length - fp.to : fp.from;
+        if (near < reach - 1e-6) out.push(x);
+      }
+    }
+    return out;
+  }
+
+  /** Ширина не больше пресета (у подогнанной мебели presetId = null — сравниваем с запрошенным). */
+  const presetWidth = (presetId?: string) => getPreset(presetId ?? "furn-kitchen")!.width;
+
+  it("Г-образная: дверь, окно, проём, балкон, затем мебель — боковины не перекрывают проёмы", () => {
+    let room = createRoom({ shape: "L" });
+    for (const kind of ["door", "window", "passage", "balcony"] as OpeningKind[]) {
+      const r = addOpening(room, kind);
+      expect(r.openingId, kind).not.toBeNull();
+      room = r.room;
+    }
+    // Раньше четвёртая мебель растягивалась на всю стену 1,5 м до угла с балконом.
+    for (let i = 0; i < 4; i++) {
+      const r = addOpening(room, "furniture");
+      room = r.room;
+      if (!r.openingId) break;
+      const f = room.openings.find((o) => o.id === r.openingId)!;
+      expect(blockedBy(room, f), `мебель №${i + 1}`).toEqual([]);
+      expect(f.width).toBeLessThanOrEqual(presetWidth() + 1e-9);
+    }
+  });
+
+  it("подгонка по месту: участок у угла с дверью соседней стены укорачивается на DOORWAY_CLEARANCE", () => {
+    // Комната 1,8 × 1,5: на стене D (p3: (0,1.5)→(0,0)) дверь у самого угла D/A.
+    const d: Opening = { ...createOpening("door", "p3", 0.6, "door-80"), id: "d" };
+    const room = mk([[0, 0], [1.8, 0], [1.8, 1.5], [0, 1.5]], [d]);
+    const r = addOpening(room, "furniture", { wallId: "p0" });
+    const f = r.room.openings.find((o) => o.id === r.openingId)!;
+    expect(f.offset).toBeGreaterThanOrEqual(DOORWAY_CLEARANCE - 1e-9);
+    expect(f.offset + f.width).toBeCloseTo(1.8); // к свободному углу A/B — вплотную
+    expect(f.presetId).toBeNull();
+    expect(blockedBy(r.room, f)).toEqual([]);
+  });
+
+  it("длинная мебель не упирается дальним концом в дверь соседней стены", () => {
+    // Стена A 2,5 м; на стене B у угла A/B — дверь. Шкаф-купе 2,0 м в углу A/D
+    // оставил бы до двери 0,5 м — полотно двери упёрлось бы в шкаф.
+    const d: Opening = { ...createOpening("door", "p1", 0.1, "door-80"), id: "d" };
+    const room = mk([[0, 0], [2.5, 0], [2.5, 4], [0, 4]], [d]);
+    const r = addOpening(room, "furniture", { wallId: "p0", presetId: "furn-wardrobe" });
+    const f = r.room.openings.find((o) => o.id === r.openingId)!;
+    expect(f.offset).toBeCloseTo(0);
+    expect(f.offset + f.width).toBeLessThanOrEqual(2.5 - DOORWAY_CLEARANCE + 1e-9);
+    expect(f.width).toBeLessThanOrEqual(presetWidth("furn-wardrobe"));
+    expect(blockedBy(r.room, f)).toEqual([]);
+  });
+
+  it("чужой пресет не задаёт размер мебели; подгонка — не шире пресета мебели", () => {
+    const room = mk([[0, 0], [1.8, 0], [1.8, 1.5], [0, 1.5]]);
+    const r = addOpening(room, "furniture", { presetId: "door-80" });
+    const f = r.room.openings[0];
+    expect(f.width).toBeCloseTo(1.8);
+    expect(f.depth).toBeCloseTo(0.6);
+    const closet = addOpening(mk([[0, 0], [4, 0], [4, 3], [0, 3]]), "furniture", { presetId: "furn-closet" });
+    expect(closet.room.openings[0].width).toBeCloseTo(presetWidth("furn-closet"));
+  });
+
+  it("если места без перекрытия нет — мебель не ставится", () => {
+    // Комната 1,2 × 1,0: короткие стены B и D заняты проходами во всю длину,
+    // у длинных A и C оба угла — у проходов, а 1,2 − 2 × 0,9 < 0,3.
+    const room = mk(
+      [[0, 0], [1.2, 0], [1.2, 1], [0, 1]],
+      [
+        { ...createOpening("passage", "p1", 0.05, "pass-90"), id: "a" },
+        { ...createOpening("passage", "p3", 0.05, "pass-90"), id: "b" },
+      ],
+    );
+    const r = addOpening(room, "furniture");
+    expect(r.openingId).toBeNull();
+    expect(r.room).toBe(room);
+  });
+
+  it("дверь по возможности не встаёт за боковину мебели, но и не теряется", () => {
+    // Мебель в углу B/C на стене C (p2) — у конца стены B (p1).
+    const f: Opening = { ...createOpening("furniture", "p2", 0, "furn-kitchen"), id: "f" };
+    const short = mk([[0, 0], [3, 0], [3, 1.6], [0, 1.6]], [f]);
+    const r = addOpening(short, "door", { wallId: "p1" });
+    const dd = r.room.openings.find((o) => o.id === r.openingId)!;
+    // По центру стены B дверь ушла бы за боковину — сдвигается к другому углу.
+    expect(footprint(dd).to).toBeLessThanOrEqual(1.6 - (f.depth + FREE_GAP) + 1e-9);
+    expect(blockedBy(r.room, f)).toEqual([]);
+    // На стене 1,2 м места вне боковины нет — дверь всё равно ставится (её важнее не потерять).
+    const tiny = mk([[0, 0], [3, 0], [3, 1.2], [0, 1.2]], [f]);
+    expect(addOpening(tiny, "door", { wallId: "p1" }).openingId).not.toBeNull();
+  });
+
+  it.each(["rect", "L", "U", "T", "corner-box", "bay", "trapezoid"] as RoomShapeId[])(
+    "%s: случайные проёмы — новая мебель никогда не перекрывает проёмы",
+    (shape) => {
+      let seed = shape.length * 7919;
+      const rnd = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+      const kinds: OpeningKind[] = ["door", "window", "passage", "balcony", "furniture"];
+      const furn = [undefined, "furn-kitchen", "furn-wardrobe", "furn-closet", "furn-bath", "furn-other"];
+      for (let run = 0; run < 25; run++) {
+        let room = createRoom({ shape });
+        for (let i = 0; i < 9; i++) {
+          const kind = kinds[Math.floor(rnd() * kinds.length)];
+          const presetId = kind === "furniture" ? furn[Math.floor(rnd() * furn.length)] : undefined;
+          const r = addOpening(room, kind, presetId ? { presetId } : {});
+          room = r.room;
+          if (kind !== "furniture" || !r.openingId) continue;
+          const f = room.openings.find((o) => o.id === r.openingId)!;
+          expect(blockedBy(room, f), `${shape} #${run}.${i}`).toEqual([]);
+          expect(f.width).toBeLessThanOrEqual(presetWidth(presetId) + 1e-9);
+        }
+      }
+    },
+  );
 });
 
 describe("updateOpening / moveOpening / remove / duplicate", () => {

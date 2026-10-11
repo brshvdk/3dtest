@@ -36,16 +36,29 @@ interface PlanUiState {
   ctxFocus: boolean;
   /** Высота панели, прижатой к низу плана (0 — её нет), px: вписывание учитывает её. */
   sheetH: number;
+  /** Подсказка новичку «Тяните стену…» скрыта (крестиком или после первой правки на плане); запоминается. */
+  hintHidden: boolean;
   setHover(h: HoverTarget, inRoom: boolean): void;
   setDrag(d: DragInfo | null): void;
   setEditing(k: string | null): void;
   setCtxFor(sel: Selection): void;
   setCtxFocus(v: boolean): void;
   setSheetH(h: number): void;
+  hideHint(): void;
 }
 
 const sameHover = (a: HoverTarget, b: HoverTarget): boolean =>
   a === b || (!!a && !!b && a.type === b.type && a.id === b.id);
+
+const HINT_KEY = "merka:plan-hint-hidden";
+
+function readHintHidden(): boolean {
+  try {
+    return localStorage.getItem(HINT_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 export const usePlanUi = create<PlanUiState>((set, get) => ({
   hover: null,
@@ -55,6 +68,7 @@ export const usePlanUi = create<PlanUiState>((set, get) => ({
   ctxFor: null,
   ctxFocus: false,
   sheetH: 0,
+  hintHidden: readHintHidden(),
   setHover(hover, inRoom) {
     const s = get();
     if (sameHover(s.hover, hover) && s.inRoom === inRoom) return;
@@ -75,7 +89,25 @@ export const usePlanUi = create<PlanUiState>((set, get) => ({
   setSheetH(sheetH) {
     if (get().sheetH !== sheetH) set({ sheetH });
   },
+  hideHint() {
+    if (get().hintHidden) return;
+    set({ hintHidden: true });
+    try {
+      localStorage.setItem(HINT_KEY, "1");
+    } catch {
+      // приватный режим — просто скрываем до перезагрузки
+    }
+  },
 }));
+
+/**
+ * Пользователь успешно что-то поменял на самом плане (перетащил стену, угол
+ * или проём, ввёл размер в плашке или панели) — он разобрался, подсказка
+ * новичку больше не нужна.
+ */
+export function notePlanEdit(): void {
+  usePlanUi.getState().hideHint();
+}
 
 /** Ключ выделения: `wall:<id>`, `point:<id>`, `opening:<id>` (и data-plan-key у ручек плана). */
 export function selectionKey(sel: Selection): string {

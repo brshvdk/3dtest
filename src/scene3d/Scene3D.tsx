@@ -155,6 +155,55 @@ const WALL_MODES: Array<{
 
 const NO_DOOR_TITLE = "В комнате нет двери — встанем у самой длинной стены";
 
+/**
+ * Сколько подписей помещается в панель (вид шире 560 px; уже — свой
+ * компактный вид в CSS): «full» — все подписи в строку; «stack» — у режимов
+ * стен подпись под иконкой; «stack-short» — то же, а ракурсы с короткими
+ * подписями; «icons» — у режимов одни иконки (запасной вариант). Выбираем
+ * по факту — самый подробный ярус, при котором панель не переполнена:
+ * ширина подписей зависит от шрифта и масштаба, порог по ширине вида её
+ * не угадает.
+ */
+type ToolbarFit = "full" | "stack" | "stack-short" | "icons";
+const TOOLBAR_FITS: ToolbarFit[] = ["full", "stack", "stack-short", "icons"];
+
+function useToolbarFit(ref: RefObject<HTMLDivElement>) {
+  useLayoutEffect(() => {
+    const bar = ref.current;
+    const host = bar?.parentElement;
+    if (!bar || !host) return;
+    let lastWidth = -1;
+    const fit = (force = false) => {
+      const w = host.clientWidth;
+      if (!force && w === lastWidth) return;
+      lastWidth = w;
+      let chosen: ToolbarFit = "icons";
+      // Группы кнопок сжимаются (min-width: 0) — переполнение видно по ним, а не по панели.
+      const overflows = (el: Element) => el.scrollWidth > el.clientWidth + 1;
+      for (const f of TOOLBAR_FITS) {
+        bar.dataset.fit = f;
+        if (!overflows(bar) && !Array.from(bar.children).some(overflows)) {
+          chosen = f;
+          break;
+        }
+      }
+      bar.dataset.fit = chosen;
+      // Подпись «что включилось» над панелью нужна, только если у режимов нет текста в строку.
+      host.dataset.tbfit = chosen;
+    };
+    fit(true);
+    const ro = new ResizeObserver(() => fit());
+    ro.observe(host);
+    let alive = true;
+    // Шрифт догрузился — ширина подписей другая.
+    document.fonts?.ready.then(() => alive && fit(true)).catch(() => undefined);
+    return () => {
+      alive = false;
+      ro.disconnect();
+    };
+  }, [ref]);
+}
+
 function Toolbar() {
   const activePreset = useView3d((s) => s.activePreset);
   const wallMode = useView3d((s) => s.wallMode);
@@ -182,14 +231,17 @@ function Toolbar() {
     };
   }, []);
 
+  const ref = useRef<HTMLDivElement>(null);
+  useToolbarFit(ref);
+
   return (
-    <div className="s3d-toolbar" role="toolbar" aria-label="Управление 3D-видом">
+    <div className="s3d-toolbar" ref={ref} role="toolbar" aria-label="Управление 3D-видом">
       <div className="s3d-toolbar__group" role="group" aria-label="Ракурс">
         {PRESETS.map((p) => (
           <button
             key={p.id}
             type="button"
-            className={`s3d-tbtn${activePreset === p.id ? " is-active" : ""}`}
+            className={`s3d-tbtn s3d-tbtn--view${activePreset === p.id ? " is-active" : ""}`}
             onClick={() => handlers.preset(p, !hasEntrance)}
             title={p.id === "entry" && !hasEntrance ? NO_DOOR_TITLE : p.title}
             aria-label={p.label}

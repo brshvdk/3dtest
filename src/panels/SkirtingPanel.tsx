@@ -3,7 +3,7 @@
  * для отдельной комнаты, параметры выбранного (длина планки, цвет, углы,
  * цены, крепёж) и параметры расчёта (запас, минимальный кусок, пропил).
  */
-import { memo, useCallback, useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import {
   CUSTOM_PRODUCT_ID,
   MATERIAL_META,
@@ -36,9 +36,12 @@ import {
   Segmented,
   Switch,
   TextField,
+  rovingFocusIndex,
+  rovingKeyDown,
 } from "../ui/kit";
 import { scrollBehavior } from "./motion";
 import { ProfileIcon } from "./ProfileIcon";
+import { rovingFocusKeyDown } from "./roving";
 import "./panels.css";
 
 /** Общий масштаб иконок каталога: 120 мм — вся высота. */
@@ -63,13 +66,24 @@ const CORNER_HINT: Record<CornerMethod, string> = {
     "Концы планок срезаются под 45° и стыкуются без накладок. Выглядит аккуратнее, но понадобятся стусло или торцовочная пила.",
 };
 
-/** Пояснение к способу стыковки углов (керамику режут не пилой). */
+/**
+ * Пояснение к способу стыковки углов (керамику режут не пилой). У ПВХ с
+ * кабель-каналом запил заменяет только уголки: торцы закрывают заглушками,
+ * стыки по длине — соединителями (domain/estimate, keepsEndFittings).
+ */
 function cornerHint(p: SkirtingProduct): string {
   if (p.cornerMethod === "miter" && p.material === "ceramic") {
     return "Концы плитки срезаются под 45° плиткорезом или болгаркой и стыкуются без накладок.";
   }
+  if (p.cornerMethod === "miter" && p.cableChannel) {
+    return "Концы планок срезаются под 45°: не нужны угловые элементы; заглушки и соединители остаются. Понадобятся стусло или торцовочная пила.";
+  }
   return CORNER_HINT[p.cornerMethod];
 }
+
+/** Подсказка к варианту «Запил 45°». */
+const miterTitle = (p: SkirtingProduct): string =>
+  p.cableChannel ? "Без угловых элементов; заглушки и соединители остаются" : "Стыковка без уголков";
 
 /* ------------------------------------------------------------------ */
 
@@ -135,6 +149,10 @@ const CatalogSection = memo(function CatalogSection({ selectedId }: { selectedId
     [groups, selectedId, overrides],
   );
   const projectProductName = resolveProduct(projectProductId, overrides).shortName;
+  const tabStopId = useMemo(() => {
+    const all = groups.flatMap((g) => g.items);
+    return all[rovingFocusIndex(all, (p) => p.id === selectedId)]?.id ?? null;
+  }, [groups, selectedId]);
 
   /** Выбор из списка: меняет плинтус комнаты (если у неё свой) или проекта и сворачивает список. */
   const pick = useCallback((id: string) => {
@@ -189,14 +207,28 @@ const CatalogSection = memo(function CatalogSection({ selectedId }: { selectedId
 
       <div ref={rootRef} className="pn-catalog">
         {expanded ? (
-          <div id={listId} className="pn-catalog__list">
+          // Один выбор на весь каталог — одна группа radio с одной остановкой Tab.
+          // Стрелки только листают (выбор сворачивает список), выбирают Enter или пробелом.
+          <div
+            id={listId}
+            className="pn-catalog__list"
+            role="radiogroup"
+            aria-label="Плинтус"
+            onKeyDown={rovingFocusKeyDown}
+          >
             {groups.map((g) => (
-              <div key={g.key} className="pn-catgroup" role="radiogroup" aria-label={g.title}>
-                <div className="pn-catgroup__title" title={g.hint}>
+              <div key={g.key} className="pn-catgroup" role="group" aria-labelledby={`${listId}-${g.key}`}>
+                <div id={`${listId}-${g.key}`} className="pn-catgroup__title" title={g.hint}>
                   {g.title}
                 </div>
                 {g.items.map((p) => (
-                  <CatalogCard key={p.id} product={p} selected={p.id === selectedId} onPick={pick} />
+                  <CatalogCard
+                    key={p.id}
+                    product={p}
+                    selected={p.id === selectedId}
+                    tabbable={p.id === tabStopId}
+                    onPick={pick}
+                  />
                 ))}
               </div>
             ))}
@@ -226,11 +258,14 @@ const CatalogSection = memo(function CatalogSection({ selectedId }: { selectedId
 const CatalogCard = memo(function CatalogCard({
   product: p,
   selected,
+  tabbable,
   onPick,
   summary,
 }: {
   product: SkirtingProduct;
   selected: boolean;
+  /** Остановка Tab в группе (roving tabindex); у свёрнутой карточки не нужна. */
+  tabbable?: boolean;
   onPick: (id: string) => void;
   /** Свёрнутый каталог: карточка выбранного, клик открывает список. */
   summary?: boolean;
@@ -240,6 +275,7 @@ const CatalogCard = memo(function CatalogCard({
       type="button"
       role={summary ? undefined : "radio"}
       aria-checked={summary ? undefined : selected}
+      tabIndex={summary ? undefined : tabbable ? 0 : -1}
       className={`pn-prod${selected ? " is-active" : ""}${summary ? " is-summary" : ""}`}
       onClick={() => onPick(p.id)}
       title={summary ? `${p.description}\nНажмите, чтобы выбрать другой` : p.description}
@@ -354,13 +390,17 @@ const ProductSection = memo(function ProductSection({ product: p }: { product: S
             options={p.cornerMethods.map((m) => ({
               value: m,
               label: m === "fittings" ? "Фурнитура" : "Запил 45°",
-              title: m === "fittings" ? "Готовые уголки, заглушки и соединители" : "Стыковка без уголков",
+              title: m === "fittings" ? "Готовые уголки, заглушки и соединители" : miterTitle(p),
             }))}
           />
         ) : (
           <div className="pn-static">
             <Icon name={p.cornerMethod === "miter" ? "scissors" : "skirting"} size={16} />
-            {p.cornerMethod === "miter" ? "Запил 45° — уголки не нужны" : "Фурнитура (уголки)"}
+            {p.cornerMethod === "miter"
+              ? p.cableChannel
+                ? "Запил 45° — не нужны угловые элементы"
+                : "Запил 45° — уголки не нужны"
+              : "Фурнитура (уголки)"}
           </div>
         )}
       </Field>
@@ -395,6 +435,9 @@ function Fact({ k, v }: { k: string; v: string }) {
   );
 }
 
+/** Клавиши, которыми листают группу radio (rovingKeyDown выбирает соседний вариант). */
+const ROVING_KEYS = new Set(["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"]);
+
 function PlankLength({
   product: p,
   update,
@@ -404,6 +447,9 @@ function PlankLength({
 }) {
   const standard = p.lengths.some((l) => Math.abs(l - p.length) < 1e-6);
   const [otherOpen, setOtherOpen] = useState(false);
+  /** Поле своей длины забирает фокус, только если «Другая» выбрана нажатием, а не стрелками. */
+  const [focusOther, setFocusOther] = useState(false);
+  const viaArrows = useRef(false);
   const showOther = otherOpen || !standard;
   const value = showOther ? "other" : String(p.length);
   const options = [
@@ -413,44 +459,59 @@ function PlankLength({
   const onChange = (v: string) => {
     if (v === "other") {
       setOtherOpen(true);
+      setFocusOther(!viaArrows.current);
       return;
     }
     setOtherOpen(false);
     update({ length: Number(v) });
   };
+  // Стрелки внутри группы выбирают соседний вариант синхронно (click) — помечаем такой выбор.
+  // Сброс — следующей задачей: микрозадача выполнилась бы между фазами
+  // перехвата и всплытия, раньше обработчика группы.
+  const onKeyDownCapture = (e: KeyboardEvent<HTMLElement>) => {
+    if (!ROVING_KEYS.has(e.key)) return;
+    viaArrows.current = true;
+    setTimeout(() => {
+      viaArrows.current = false;
+    }, 0);
+  };
+  const focusIndex = rovingFocusIndex(options, (o) => o.value === value);
   return (
     <Field label="Длина планки" hint="Чем длиннее планка, тем меньше стыков на длинных стенах.">
-      {options.length <= 5 ? (
-        <Segmented<string> block value={value} ariaLabel="Длина планки" onChange={onChange} options={options} />
-      ) : (
-        <div className="pn-chips" role="radiogroup" aria-label="Длина планки">
-          {options.map((o) => (
-            <button
-              key={o.value}
-              type="button"
-              role="radio"
-              aria-checked={o.value === value}
-              className={`pn-chip${o.value === value ? " is-active" : ""}`}
-              onClick={() => onChange(o.value)}
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      )}
-      {showOther ? (
-        <LengthField
-          className="pn-other-length"
-          ariaLabel="Своя длина планки"
-          value={p.length}
-          unit="m"
-          min={0.1}
-          max={12}
-          step={0.05}
-          autoFocus={otherOpen && standard}
-          onChange={(v) => update({ length: v })}
-        />
-      ) : null}
+      <div className="pn-contents" onKeyDownCapture={onKeyDownCapture}>
+        {options.length <= 5 ? (
+          <Segmented<string> block value={value} ariaLabel="Длина планки" onChange={onChange} options={options} />
+        ) : (
+          <div className="pn-chips" role="radiogroup" aria-label="Длина планки" onKeyDown={rovingKeyDown}>
+            {options.map((o, i) => (
+              <button
+                key={o.value}
+                type="button"
+                role="radio"
+                aria-checked={o.value === value}
+                tabIndex={i === focusIndex ? 0 : -1}
+                className={`pn-chip${o.value === value ? " is-active" : ""}`}
+                onClick={() => onChange(o.value)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        )}
+        {showOther ? (
+          <LengthField
+            className="pn-other-length"
+            ariaLabel="Своя длина планки"
+            value={p.length}
+            unit="m"
+            min={0.1}
+            max={12}
+            step={0.05}
+            autoFocus={otherOpen && focusOther && standard}
+            onChange={(v) => update({ length: v })}
+          />
+        ) : null}
+      </div>
     </Field>
   );
 }
@@ -560,10 +621,11 @@ function AccessoryPricesForm({
       {!fittings ? (
         <p className="pn-note">
           {p.cableChannel
-            ? "При запиле под 45° уголки не нужны; заглушки и соединители у плинтуса с кабель-каналом остаются."
+            ? "При запиле под 45° не нужны угловые элементы; заглушки и соединители остаются — торец кабель-канала закрывают заглушкой, стыки по длине стены — соединителем."
             : "При запиле под 45° уголки, заглушки и соединители не нужны."}
         </p>
-      ) : p.handedEndCaps ? (
+      ) : null}
+      {(fittings || p.cableChannel) && p.handedEndCaps ? (
         <p className="pn-note">Заглушки бывают левые и правые — цена у них одна, в списке покупок они посчитаны отдельно.</p>
       ) : null}
       {p.fastening === "clips" ? (

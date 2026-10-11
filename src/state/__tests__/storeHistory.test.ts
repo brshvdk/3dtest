@@ -1,13 +1,15 @@
 /**
  * Состязательные тесты истории хранилища: undo/redo возвращают ровно
- * прежние состояния (по ссылке), жест — ровно одна запись, пустые правки
- * историю не засоряют, выделение всегда указывает на существующий объект.
+ * прежние состояния (содержимое — те же объекты, updatedAt — свежий, см.
+ * historyExpect), жест — ровно одна запись, пустые правки историю не
+ * засоряют, выделение всегда указывает на существующий объект.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWalls } from "../../domain/geometry";
 import { MAX_PROJECT_ROOMS, createProject } from "../../domain/project";
 import type { OpeningKind, Project, Room } from "../../domain/types";
 import { HISTORY_LIMIT, useAppStore, type AppState } from "../store";
+import { expectSameVersion, expectSameVersions } from "./historyExpect";
 
 const S = () => useAppStore.getState();
 const active = (): Room => S().project.rooms.find((r) => r.id === S().activeRoomId)!;
@@ -31,6 +33,7 @@ function reset(project: Project = createProject()) {
     activeRoomId: project.rooms[0].id,
     selection: null,
     hoverSegmentId: null,
+    hoverWallId: null,
     view: "split",
     panelTab: "room",
     past: [],
@@ -117,19 +120,19 @@ describe("undo/redo: ровно прежние состояния", () => {
     // назад до самого начала
     for (let k = states.length - 2; k >= 0; k--) {
       S().undo();
-      expect(S().project).toBe(states[k]);
+      expectSameVersion(S().project, states[k]);
       expectSelectionValid();
     }
     S().undo(); // пустая история — ничего не происходит
-    expect(S().project).toBe(states[0]);
+    expectSameVersion(S().project, states[0]);
     // и вперёд до конца
     for (let k = 1; k < states.length; k++) {
       S().redo();
-      expect(S().project).toBe(states[k]);
+      expectSameVersion(S().project, states[k]);
       expectSelectionValid();
     }
     S().redo();
-    expect(S().project).toBe(states[states.length - 1]);
+    expectSameVersion(S().project, states[states.length - 1]);
   });
 
   it("правка после undo отбрасывает будущее", () => {
@@ -141,7 +144,7 @@ describe("undo/redo: ровно прежние состояния", () => {
     expect(S().future).toHaveLength(2);
     S().moveWall(active().points[1].id, -0.3);
     expect(S().future).toEqual([]);
-    expect(S().past).toEqual([p0]);
+    expectSameVersions(S().past, [p0]);
   });
 
   it("future тоже ограничено HISTORY_LIMIT", () => {
@@ -168,9 +171,9 @@ describe("жесты", () => {
     expect(S().past).toHaveLength(before + 1);
     const dragged = S().project;
     S().undo();
-    expect(S().project).toBe(base);
+    expectSameVersion(S().project, base);
     S().redo();
-    expect(S().project).toBe(dragged);
+    expectSameVersion(S().project, dragged);
   });
 
   it("вложенный beginGesture не сдвигает базу", () => {
@@ -209,7 +212,7 @@ describe("жесты", () => {
     S().beginGesture();
     S().moveWall(active().points[1].id, -0.2, { transient: true });
     S().undo();
-    expect(S().project).toBe(base);
+    expectSameVersion(S().project, base);
     expect(S().past).toHaveLength(0);
     expect(S().future).toHaveLength(1);
   });
@@ -342,10 +345,10 @@ describe("жесты, transient и обычные правки вперемеш�
     expect(states.length).toBeGreaterThan(30);
     for (let k = states.length - 2; k >= 0; k--) {
       S().undo();
-      expect(S().project).toBe(states[k]);
+      expectSameVersion(S().project, states[k]);
     }
     for (let k = 1; k < states.length; k++) S().redo();
     // вперёд — до последнего «закоммиченного» состояния (склеенные transient — одной записью)
-    expect(S().project).toBe(states[states.length - 1]);
+    expectSameVersion(S().project, states[states.length - 1]);
   });
 });
