@@ -98,7 +98,7 @@ export interface RoomSkirtingResult {
   segments: SkirtingSegment[];
   /** Непрерывные цепочки (через углы); closed=true — замкнутое кольцо без разрывов. */
   runs: SkirtingRun[];
-  /** Стыки-углы между существующими сегментами (nonRight — угол не 90/270). */
+  /** Стыки-углы между существующими сегментами (nonRight — угол не 90/270 ± RIGHT_ANGLE_TOL_DEG). */
   corners: { inner: number; outer: number; nonRight: number };
   /** Свободные концы: start 'end' → левая, end 'end' → правая. */
   endCaps: { left: number; right: number };
@@ -112,6 +112,12 @@ export const MIN_SEGMENT = 0.005;
 export const SHORT_SEGMENT = 0.05;
 /** Откос не делаем, если сторона проёма ближе к углу/соседнему проёму, м. */
 export const REVEAL_MIN_GAP = 0.01;
+/**
+ * Градусы: угол в пределах 90° ± допуск (или 270° ± допуск) — прямой.
+ * Стандартные уголки ПВХ и МДФ садятся на 87–93°, а отклонение стен на
+ * 1–3° есть почти в любой квартире — гибкий угол для них не нужен.
+ */
+export const RIGHT_ANGLE_TOL_DEG = 3;
 /** Больше этого угла запил не считаем (вырожденный «шип»), градусы. */
 const MAX_MITER_ANGLE = 350;
 /** Стена короче не имеет направления (совпадающие точки) и в обходе пропускается, м. */
@@ -148,10 +154,12 @@ interface Line {
 /** Участок линии, занятый проёмом (обрезан по линии). */
 interface Block {
   opening: Opening;
-  /** Стена проёма. */
+  /** Стена проёма (для боковины мебели — соседняя стена, которую она закрывает). */
   wall: Wall;
   from: number;
   to: number;
+  /** Боковина мебели, стоящей в углу: участок соседней стены на глубину корпуса. */
+  side?: boolean;
 }
 
 /** Объединение пересекающихся/касающихся блоков. */
@@ -239,34 +247,118 @@ function lineBlocks(line: Line, byWall: Map<string, Opening[]>, skirtingHeight: 
       if (to - from > NOISE) blocks.push({ opening, wall, from, to });
     }
   });
-  return blocks.sort((p, q) => p.from - q.from || q.to - p.to);
+  return blocks.sort(byFrom);
 }
+
+/** Что закрыла боковина мебели: длина и стены (для подписи вычета). */
+interface SideInfo {
+  length: number;
+  walls: string[];
+}
+
+/** м: мебель ближе к углу стоит «в углу» — зазор плинтусом не закрыть, боковина закрывает соседнюю стену. */
+export const FURNITURE_CORNER_GAP = 0.02;
+
+/**
+ * Сколько соседней стены (от общего угла) закрывает корпус глубины depth и
+ * длины width, придвинутый к углу. Внутренний угол до 90° + допуск: стена
+ * идёт вдоль боковины (или в корпус, если угол острый); на тупом угле
+ * (эркер) стена уходит от корпуса — плинтус за боковиной есть.
+ */
+function sideReach(kind: CornerKind, angle: number, depth: number, width: number): number {
+  if (kind !== "inner" || !(depth > 0) || angle > 90 + RIGHT_ANGLE_TOL_DEG) return 0;
+  const turn = toRad(180 - angle);
+  const across = Math.sin(turn) > NOISE ? depth / Math.sin(turn) : Infinity;
+  const along = Math.cos(turn) < -NOISE ? width / -Math.cos(turn) : Infinity;
+  const reach = Math.min(across, along);
+  return Number.isFinite(reach) ? reach : 0;
+}
+
+/**
+ * Мебель, придвинутая к углу (зазор ≤ FURNITURE_CORNER_GAP), занимает угол
+ * целиком, а её боковина — участок соседней линии на глубину корпуса:
+ * плинтус за кухней и шкафом не нужен, заглушка встаёт у боковины.
+ */
+function addFurnitureSides(lines: Line[], perLine: Block[][]): void {
+  const n = lines.length;
+  if (n < 2) return;
+  const own = perLine.map((list) => [...list]);
+  own.forEach((list, k) => {
+    const line = lines[k];
+    for (const b of list) {
+      const o = b.opening;
+      if (o.kind !== "furniture" || !(o.depth > 0)) continue;
+      const width = b.to - b.from;
+      if (b.to >= line.length - FURNITURE_CORNER_GAP) {
+        const ni = (k + 1) % n;
+        const next = lines[ni];
+        const reach = Math.min(sideReach(next.startKind, next.startAngle, o.depth, width), next.length);
+        if (reach > NOISE) {
+          b.to = line.length;
+          perLine[ni].push({ opening: o, wall: next.walls[0], from: 0, to: reach, side: true });
+        }
+      }
+      if (b.from <= FURNITURE_CORNER_GAP) {
+        const pi = (k - 1 + n) % n;
+        const prev = lines[pi];
+        const reach = Math.min(sideReach(line.startKind, line.startAngle, o.depth, width), prev.length);
+        if (reach > NOISE) {
+          b.from = 0;
+          const wall = prev.walls[prev.walls.length - 1];
+          perLine[pi].push({ opening: o, wall, from: prev.length - reach, to: prev.length, side: true });
+        }
+      }
+    }
+  });
+  for (const list of perLine) list.sort(byFrom);
+}
+
+/** По левому краю; при равенстве — длинный раньше. */
+const byFrom = (p: Block, q: Block) => p.from - q.from || q.to - p.to;
 
 /**
  * Объединяет блоки линии, считает вклад каждого проёма без двойного счёта
  * и собирает предупреждения о перекрытиях.
  */
-function mergeBlocks(blocks: Block[], contrib: Map<string, number>, warnings: string[]): Group[] {
+function mergeBlocks(
+  blocks: Block[],
+  contrib: Map<string, number>,
+  warnings: string[],
+  sides: Map<string, SideInfo>,
+): Group[] {
   const groups: Group[] = [];
   let members: Block[] = [];
+  /** Вклад проёма копится: у мебели в углу есть ещё боковина на соседней линии. */
+  const credit = (b: Block, len: number) => {
+    contrib.set(b.opening.id, (contrib.get(b.opening.id) ?? 0) + len);
+    if (b.side && len > NOISE) {
+      const info = sides.get(b.opening.id) ?? { length: 0, walls: [] };
+      info.length += len;
+      if (!info.walls.includes(b.wall.label)) info.walls.push(b.wall.label);
+      sides.set(b.opening.id, info);
+    }
+  };
   for (const b of blocks) {
     const g = groups[groups.length - 1];
     if (g && b.from <= g.to + NOISE) {
-      if (b.from < g.to - LEN_EPS) {
-        const other = members.find((x) => x.to > b.from + LEN_EPS) ?? g.first;
+      const other = members.find((x) => x.to > b.from + LEN_EPS) ?? g.first;
+      // Мебель, сомкнутая в углу с другой мебелью (угловая кухня), — не ошибка.
+      const cornerFurniture =
+        (b.side || other.side) && b.opening.kind === "furniture" && other.opening.kind === "furniture";
+      if (b.from < g.to - LEN_EPS && !cornerFurniture) {
         warnings.push(
           `На стене ${b.wall.label} перекрываются: ${describeOpening(other.opening)} и ${describeOpening(b.opening)}. Проверьте их положение — плинтус посчитан без двойного вычета.`,
         );
       }
       // Вклад — только то, что выходит за уже занятое группой.
-      contrib.set(b.opening.id, Math.max(0, b.to - g.to));
+      credit(b, Math.max(0, b.to - g.to));
       members.push(b);
       if (b.to > g.to) {
         g.to = b.to;
         g.last = b;
       }
     } else {
-      contrib.set(b.opening.id, b.to - b.from);
+      credit(b, b.to - b.from);
       groups.push({ from: b.from, to: b.to, first: b, last: b });
       members = [b];
     }
@@ -473,12 +565,14 @@ export function computeRoomSkirting(room: Room, product: SkirtingProduct): RoomS
   const lines = buildLines(walls);
   const contrib = new Map<string, number>();
   const revealLen = new Map<string, number>();
-  const blocks: Block[] = [];
-  const perLine = lines.map((line) => {
-    const lb = lineBlocks(line, byWall, product.height);
-    blocks.push(...lb);
-    return lineDrafts(line, mergeBlocks(lb, contrib, warnings), contrib, revealLen, warnings);
-  });
+  const sides = new Map<string, SideInfo>();
+  const lineBlockLists = lines.map((line) => lineBlocks(line, byWall, product.height));
+  addFurnitureSides(lines, lineBlockLists);
+  // Свои блоки проёмов (без боковин) — для записей вычетов и откосов.
+  const blocks: Block[] = lineBlockLists.flat().filter((b) => !b.side);
+  const perLine = lines.map((line, k) =>
+    lineDrafts(line, mergeBlocks(lineBlockLists[k], contrib, warnings, sides), contrib, revealLen, warnings),
+  );
   joinLines(lines, perLine);
 
   // Вычеты и откосы — по одной записи на проём, в порядке стен.
@@ -486,9 +580,12 @@ export function computeRoomSkirting(room: Room, product: SkirtingProduct): RoomS
   for (const b of [...blocks].sort(byWallIndex)) {
     const length = contrib.get(b.opening.id) ?? 0;
     if (length <= NOISE) continue;
+    const side = sides.get(b.opening.id);
     result.deductions.push({
       openingId: b.opening.id,
-      label: describeOpening(b.opening),
+      label: side
+        ? `${describeOpening(b.opening)} и боковина ${cm(side.length)} см на стене ${side.walls.join(", ")}`
+        : describeOpening(b.opening),
       kind: b.opening.kind,
       wallLabel: b.wall.label,
       length,
@@ -553,7 +650,7 @@ export function computeRoomSkirting(room: Room, product: SkirtingProduct): RoomS
     // Каждый угол — конец одного сегмента и начало следующего: считаем по концам.
     if (s.endJoint === "inner" || s.endJoint === "outer") {
       result.corners[s.endJoint] += 1;
-      if (!isRightAngle(s.endAngle, 1)) result.corners.nonRight += 1;
+      if (!isRightAngle(s.endAngle, RIGHT_ANGLE_TOL_DEG)) result.corners.nonRight += 1;
     }
   }
 
@@ -568,6 +665,23 @@ export function computeRoomSkirting(room: Room, product: SkirtingProduct): RoomS
     warnings.push("Весь периметр занят проёмами и мебелью — плинтус в этой комнате не нужен.");
   }
   return result;
+}
+
+export interface CornerInfo {
+  kind: "inner" | "outer";
+  /** Внутренний угол комнаты, градусы (как startAngle/endAngle сегмента). */
+  angle: number;
+}
+
+/** Углы-стыки между сегментами, кроме прямых (±RIGHT_ANGLE_TOL_DEG), в порядке обхода. */
+export function nonRightCorners(result: RoomSkirtingResult): CornerInfo[] {
+  const out: CornerInfo[] = [];
+  for (const s of result.segments) {
+    if ((s.endJoint === "inner" || s.endJoint === "outer") && !isRightAngle(s.endAngle, RIGHT_ANGLE_TOL_DEG)) {
+      out.push({ kind: s.endJoint, angle: s.endAngle });
+    }
+  }
+  return out;
 }
 
 /** Непрерывные цепочки сегментов: разрыв там, где конец — торец ('end'). */

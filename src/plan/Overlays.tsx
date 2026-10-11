@@ -2,12 +2,13 @@
  * Оверлеи плана поверх SVG: кнопки масштаба, масштабная линейка,
  * подсказка для новичка, сводка комнаты.
  */
-import { Fragment, memo, useCallback, useState } from "react";
+import { Fragment, memo, useCallback, useEffect, useRef, useState } from "react";
 import type { RoomSkirtingResult } from "../domain/skirtingCalc";
 import type { Room } from "../domain/types";
 import { formatArea, formatLength } from "../domain/units";
 import { useRoomMetrics } from "../state/hooks";
 import { Icon, IconButton } from "../ui/kit";
+import { usePlanUi } from "./planUi";
 import { niceScaleLength } from "./viewport";
 
 export const ZoomControls = memo(function ZoomControls({
@@ -114,10 +115,38 @@ export function Hint({
   );
 }
 
+/** мс тишины после правки, прежде чем скринридер прочитает новую сводку. */
+const ANNOUNCE_DELAY = 900;
+
+/**
+ * Сводка для скринридера: читается один раз, когда правка закончилась
+ * (не на каждом кадре перетаскивания или шаге стрелкой), и не при открытии плана.
+ */
+function SummaryAnnouncer({ text }: { text: string }) {
+  const busy = usePlanUi((u) => !!u.drag && u.drag.kind !== "pan");
+  const [spoken, setSpoken] = useState("");
+  const last = useRef(text);
+  useEffect(() => {
+    if (busy || text === last.current) return;
+    const t = window.setTimeout(() => {
+      last.current = text;
+      setSpoken(text);
+    }, ANNOUNCE_DELAY);
+    return () => window.clearTimeout(t);
+  }, [text, busy]);
+  return (
+    <span className="visually-hidden" aria-live="polite">
+      {spoken}
+    </span>
+  );
+}
+
 export const Summary = memo(function Summary({ room, result }: { room: Room; result?: RoomSkirtingResult }) {
   const m = useRoomMetrics(room.id);
+  const skirt = room.skirtingEnabled && result ? `плинтус ${formatLength(result.netLength)}` : "плинтус не считается";
   return (
-    <div className="pl-summary" aria-live="polite">
+    <div className="pl-summary">
+      <SummaryAnnouncer text={`${room.name}: пол ${formatArea(m.floorArea, 1)}, ${skirt}`} />
       <span className="pl-summary__name">{room.name}</span>
       <span className="pl-summary__sep" />
       <span className="num">{formatArea(m.floorArea, 1)}</span>

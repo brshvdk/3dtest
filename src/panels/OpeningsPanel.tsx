@@ -35,6 +35,7 @@ import {
   TextField,
   type IconName,
 } from "../ui/kit";
+import { scrollBehavior } from "./motion";
 import { notify } from "./notify";
 import "./panels.css";
 
@@ -74,6 +75,8 @@ function openingTitle(o: Opening): string {
       : o.kind === "passage" && o.arch
         ? "Арка"
         : KIND_SHORT[o.kind];
+  // Мебель — длина × глубина, как в итоге и предупреждениях (domain describeOpening).
+  if (o.kind === "furniture" && o.depth > 0) return `${name} ${sizeLabel(o.width, o.depth)}`;
   return `${name} ${sizeLabel(o.width, o.height)}`;
 }
 
@@ -311,7 +314,7 @@ const OpeningItem = memo(function OpeningItem({
 
   // Выделили на плане — показываем карточку в панели.
   useEffect(() => {
-    if (selected) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    if (selected) ref.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
   }, [selected]);
 
   const toggle = () =>

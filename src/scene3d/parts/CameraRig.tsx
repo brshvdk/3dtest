@@ -12,6 +12,7 @@ import { bbox, centroid, getWalls, outerPolygon, pointInPolygon } from "../../do
 import type { Room } from "../../domain/types";
 import { useView3d, type CameraPreset } from "../sceneState";
 import { SLAB } from "./Floor";
+import { LABEL_HALF, LABEL_LIFT, labelAnchor } from "./WallLabels";
 
 interface Pose {
   pos: Vector3;
@@ -23,74 +24,116 @@ const FOV = 38;
 /** Сверху — узкий угол: почти ортогональный вид, как план. */
 const FOV_TOP = 20;
 const FOV_ENTRY = 56;
+const FOV_ENTRY_MAX = 76;
+/** «От входа»: угол обзора по горизонтали не меньше, градусы. */
+const ENTRY_HFOV = 68;
 const DEG = Math.PI / 180;
+/** «От входа»: взгляд отклоняется от прямого из двери не больше чем на 45°. */
+const ENTRY_TURN = 45 * DEG;
 
 /** Поля кадра в пикселях: снизу — панель управления, сверху и по бокам — подписи стен. */
-const MARGIN = { top: 22, bottom: 66, side: 18 };
+const MARGIN = { top: 22, bottom: 70, side: 18 };
+/** Зазор от чипа подписи до края вида, px. */
+const LABEL_EDGE = 6;
 
 interface Viewport {
   width: number;
   height: number;
 }
 
+/** Свободная область кадра для точки в NDC (−1…1). */
+interface Bounds {
+  xl: number;
+  xh: number;
+  yl: number;
+  yh: number;
+}
+
+/** Точка, которая должна попасть в свою свободную область кадра. */
+interface FitPoint {
+  p: Vector3;
+  b: Bounds;
+}
+
 /**
- * Дистанция и цель, при которых точки pts попадают в кадр с полями и
- * центрированы в свободной области (с учётом панели снизу).
+ * Свободные области: для углов комнаты — с полями MARGIN, для подписей
+ * стен — так, чтобы чип целиком был в кадре и не заходил под панель и подсказку.
+ */
+function frameBounds(vp: Viewport, insetTop: number): { room: Bounds; label: Bounds } {
+  const w = Math.max(1, vp.width);
+  const h = Math.max(1, vp.height);
+  // Подсказка сверху не масштабируется; поля сжимаются на низком виде.
+  const inset = Math.min(insetTop, h * 0.3);
+  const k = Math.max(0.3, Math.min(1, (0.45 * h - inset) / (MARGIN.top + MARGIN.bottom)));
+  const xs = Math.min(0.3, (2 * MARGIN.side) / w);
+  const room = {
+    xl: -1 + xs,
+    xh: 1 - xs,
+    yl: -1 + (2 * MARGIN.bottom * k) / h,
+    yh: 1 - (2 * (MARGIN.top * k + inset)) / h,
+  };
+  // Чип шире полей комнаты; на очень узком виде — сколько получится.
+  const ls = Math.min(0.6, (2 * (LABEL_HALF.w + LABEL_EDGE)) / w);
+  const label = {
+    xl: -1 + ls,
+    xh: 1 - ls,
+    yl: Math.min(0, -1 + (2 * (MARGIN.bottom * k + LABEL_HALF.h)) / h),
+    yh: Math.max(0, 1 - (2 * (LABEL_EDGE + LABEL_HALF.h + inset)) / h),
+  };
+  return { room, label };
+}
+
+/**
+ * Дистанция и цель, при которых точки pts попадают каждая в свою
+ * свободную область и центрированы в ней (с учётом панели снизу).
  */
 function fitView(
-  pts: Vector3[],
+  pts: FitPoint[],
   target0: Vector3,
   back: Vector3,
   up: Vector3,
   right: Vector3,
   fovDeg: number,
   vp: Viewport,
-  insetTop: number,
 ): { pos: Vector3; target: Vector3 } {
   const w = Math.max(1, vp.width);
   const h = Math.max(1, vp.height);
-  // Подсказка сверху не масштабируется; поля сжимаются на низком виде.
-  const inset = Math.min(insetTop, h * 0.3);
-  const k = Math.max(0.3, Math.min(1, (0.45 * h - inset) / (MARGIN.top + MARGIN.bottom)));
-  const yl = -1 + (2 * MARGIN.bottom * k) / h;
-  const yh = 1 - (2 * (MARGIN.top * k + inset)) / h;
-  const xs = Math.min(0.3, (2 * MARGIN.side) / w);
-  const xl = -1 + xs;
-  const xh = 1 - xs;
   const tanV = Math.tan((fovDeg * DEG) / 2);
   const tanH = tanV * (w / h);
   const fwd = back.clone().negate();
   const target = target0.clone();
   const v = new Vector3();
+  const lo = (x: number) => Math.min(-0.05, x);
+  const hi = (x: number) => Math.max(0.05, x);
   let dist = 1;
   for (let iter = 0; iter < 3; iter++) {
     dist = 0.5;
-    for (const p of pts) {
+    for (const { p, b } of pts) {
       v.subVectors(p, target);
       const x = v.dot(right);
       const y = v.dot(up);
       const z = v.dot(fwd);
-      const nx = x >= 0 ? x / (xh * tanH) : x / (xl * tanH);
-      const ny = y >= 0 ? y / (yh * tanV) : y / (yl * tanV);
+      const nx = x >= 0 ? x / (hi(b.xh) * tanH) : x / (lo(b.xl) * tanH);
+      const ny = y >= 0 ? y / (hi(b.yh) * tanV) : y / (lo(b.yl) * tanV);
       dist = Math.max(dist, Math.max(nx, ny) - z);
     }
-    // Центрируем содержимое в свободной области.
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const p of pts) {
+    // Центрируем: запас до края своей области слева и справа (снизу и сверху) — поровну.
+    let left = Infinity;
+    let rightGap = Infinity;
+    let bottom = Infinity;
+    let top = Infinity;
+    for (const { p, b } of pts) {
       v.subVectors(p, target);
       const d = Math.max(0.05, dist + v.dot(fwd));
       const X = v.dot(right) / (d * tanH);
       const Y = v.dot(up) / (d * tanV);
-      minX = Math.min(minX, X);
-      maxX = Math.max(maxX, X);
-      minY = Math.min(minY, Y);
-      maxY = Math.max(maxY, Y);
+      left = Math.min(left, X - b.xl);
+      rightGap = Math.min(rightGap, b.xh - X);
+      bottom = Math.min(bottom, Y - b.yl);
+      top = Math.min(top, b.yh - Y);
     }
-    const dx = (minX + maxX) / 2 - (xl + xh) / 2;
-    const dy = (minY + maxY) / 2 - (yl + yh) / 2;
+    const dx = (left - rightGap) / 2;
+    const dy = (bottom - top) / 2;
     if (Math.abs(dx) < 0.004 && Math.abs(dy) < 0.004) break;
     target.addScaledVector(right, dx * dist * tanH).addScaledVector(up, dy * dist * tanV);
   }
@@ -99,7 +142,8 @@ function fitView(
 
 /**
  * Ракурс для комнаты и размера вида. insetTop — пиксели сверху, занятые
- * оверлеем (подсказкой): комната вписывается ниже.
+ * оверлеем (подсказкой): комната вписывается ниже. labels — подписи стен
+ * показаны: их чипы тоже должны попасть в кадр целиком.
  */
 export function computePose(
   room: Room,
@@ -107,22 +151,36 @@ export function computePose(
   vp: Viewport,
   wallTop = room.height,
   insetTop = 0,
+  labels = false,
 ): Pose {
   const outer = outerPolygon(room);
   const b = bbox(outer);
   const cx = b.minX + b.width / 2;
   const cz = b.minY + b.height / 2;
   const H = room.height;
+  const bounds = frameBounds(vp, insetTop);
   // Низ — по «перекрытию» под комнатой: макет в кадре целиком, с боковинами.
-  const corners: Vector3[] = [];
-  for (const p of outer) corners.push(new Vector3(p.x, -SLAB, p.y), new Vector3(p.x, wallTop, p.y));
+  const fit: FitPoint[] = [];
+  for (const p of outer) {
+    fit.push({ p: new Vector3(p.x, -SLAB, p.y), b: bounds.room }, { p: new Vector3(p.x, wallTop, p.y), b: bounds.room });
+  }
+  if (labels) {
+    // Чип над стеной; над скрытой (кукольный домик) — у пола.
+    for (const w of getWalls(room)) {
+      const a = labelAnchor(w);
+      fit.push(
+        { p: new Vector3(a.x, wallTop + LABEL_LIFT, a.z), b: bounds.label },
+        { p: new Vector3(a.x, LABEL_LIFT, a.z), b: bounds.label },
+      );
+    }
+  }
 
   if (preset === "top") {
     // Почти строго сверху; крошечный наклон задаёт «верх» экрана = −z, как у плана.
     const back = new Vector3(0, 1, 0.0006).normalize();
     const up = new Vector3(0, 0, -1);
     const right = new Vector3(1, 0, 0);
-    const { pos, target } = fitView(corners, new Vector3(cx, 0, cz), back, up, right, FOV_TOP, vp, insetTop);
+    const { pos, target } = fitView(fit, new Vector3(cx, 0, cz), back, up, right, FOV_TOP, vp);
     return { pos, target, fov: FOV_TOP };
   }
 
@@ -146,33 +204,46 @@ export function computePose(
       along = wall.length / 2;
     }
     const P = { x: wall.a.x + wall.dir.x * along, y: wall.a.y + wall.dir.y * along };
-    let back = 0.85;
+    // Стоим на пороге: так в кадре вся комната. Полотно двери, пока камера
+    // в комнате, закрыто (models/Door) — за спиной и не заслоняет вид.
+    let back = 0.4;
     let cam = { x: P.x + wall.normalIn.x * back, y: P.y + wall.normalIn.y * back };
-    while (back > 0.2 && !pointInPolygon(cam, room.points)) {
-      back -= 0.15;
+    while (back > 0.15 && !pointInPolygon(cam, room.points)) {
+      back -= 0.1;
       cam = { x: P.x + wall.normalIn.x * back, y: P.y + wall.normalIn.y * back };
     }
     const eye = Math.min(1.6, H - 0.3);
-    // Смотрим в сторону центра комнаты (или прямо, если центр рядом),
-    // цель — у дальней стены на уровне чуть ниже глаз.
+    // Смотрим в сторону центра комнаты, но не круче ENTRY_TURN от взгляда прямо
+    // из двери (дверь у торца: иначе в кадре одна боковая стена);
+    // цель — у дальней стены ниже глаз, чтобы плинтус по периметру был виден.
+    const n = wall.normalIn;
     const c = centroid(room.points);
     let dx = c.x - cam.x;
     let dz = c.y - cam.y;
-    let l = Math.hypot(dx, dz);
+    const l = Math.hypot(dx, dz);
     if (l < 0.8) {
-      dx = wall.normalIn.x;
-      dz = wall.normalIn.y;
-      l = 1;
+      dx = n.x;
+      dz = n.y;
+    } else {
+      dx /= l;
+      dz /= l;
+      if (dx * n.x + dz * n.y < Math.cos(ENTRY_TURN)) {
+        const a = Math.atan2(n.y, n.x) + (n.x * dz - n.y * dx >= 0 ? 1 : -1) * ENTRY_TURN;
+        dx = Math.cos(a);
+        dz = Math.sin(a);
+      }
     }
-    dx /= l;
-    dz /= l;
     let reach = 0.5;
     while (reach < 30 && pointInPolygon({ x: cam.x + dx * (reach + 0.25), y: cam.y + dz * (reach + 0.25) }, room.points)) {
       reach += 0.25;
     }
     const far = Math.max(1.5, reach * 0.85);
-    const target = new Vector3(cam.x + dx * far, Math.min(1.15, H * 0.45), cam.y + dz * far);
-    return { pos: new Vector3(cam.x, eye, cam.y), target, fov: FOV_ENTRY };
+    const target = new Vector3(cam.x + dx * far, Math.min(1.0, H * 0.4), cam.y + dz * far);
+    // На узком (портретном) виде угол по горизонтали иначе слишком мал — «смотрим в щель».
+    const aspect = Math.max(0.3, vp.width / Math.max(1, vp.height));
+    const hFov = (2 * Math.atan(Math.tan((ENTRY_HFOV * DEG) / 2) / aspect)) / DEG;
+    const fov = Math.min(FOV_ENTRY_MAX, Math.max(FOV_ENTRY, hFov));
+    return { pos: new Vector3(cam.x, eye, cam.y), target, fov };
   }
 
   // Перспектива: сверху-спереди-справа, комната целиком в кадре.
@@ -181,7 +252,7 @@ export function computePose(
   const back = new Vector3(Math.cos(el) * Math.sin(az), Math.sin(el), Math.cos(el) * Math.cos(az)); // от цели к камере
   const right = new Vector3().crossVectors(back.clone().negate(), new Vector3(0, 1, 0)).normalize();
   const up = new Vector3().crossVectors(right, back.clone().negate()).normalize();
-  const { pos, target } = fitView(corners, new Vector3(cx, wallTop * 0.22, cz), back, up, right, FOV, vp, insetTop);
+  const { pos, target } = fitView(fit, new Vector3(cx, wallTop * 0.22, cz), back, up, right, FOV, vp);
   return { pos, target, fov: FOV };
 }
 
@@ -236,6 +307,7 @@ export function CameraRig({ room, wallTop }: { room: Room; wallTop: number }) {
   const invalidate = useThree((s) => s.invalidate);
   const request = useView3d((s) => s.request);
   const insetTop = useView3d((s) => s.insetTop);
+  const labels = useView3d((s) => s.labels);
   const flight = useRef<Flight | null>(null);
   const roomRef = useRef(room);
   roomRef.current = room;
@@ -267,7 +339,7 @@ export function CameraRig({ room, wallTop }: { room: Room; wallTop: number }) {
 
   const fly = (preset: CameraPreset, instant: boolean) => {
     const r = roomRef.current;
-    const to = computePose(r, preset, sizeRef.current, topRef.current, insetRef.current);
+    const to = computePose(r, preset, sizeRef.current, topRef.current, insetRef.current, useView3d.getState().labels);
     fitted.current = frameOf(r);
     gesture.current = null;
     const c = controls.current;
@@ -327,7 +399,7 @@ export function CameraRig({ room, wallTop }: { room: Room; wallTop: number }) {
     return () => window.clearTimeout(t);
   }, [frameKey]);
 
-  // Высота стен в кадре (режим «Низкие») или место под подсказкой — переснять.
+  // Высота стен в кадре (режим «Низкие»), место под подсказкой или подписи стен — переснять.
   const firstTop = useRef(true);
   useEffect(() => {
     if (firstTop.current) {
@@ -335,7 +407,7 @@ export function CameraRig({ room, wallTop }: { room: Room; wallTop: number }) {
       return;
     }
     refit();
-  }, [wallTop, insetTop]);
+  }, [wallTop, insetTop, labels]);
 
   // Размер окна поменялся сильно (поворот телефона, режим «Оба») — переснять текущий ракурс.
   const lastAspect = useRef(aspect);
@@ -392,7 +464,8 @@ export function CameraRig({ room, wallTop }: { room: Room; wallTop: number }) {
     <OrbitControls
       ref={controls}
       makeDefault
-      enableDamping
+      // Инерция вращения — движение, которого пользователь просил избегать.
+      enableDamping={!reducedMotion()}
       dampingFactor={0.12}
       rotateSpeed={0.7}
       zoomSpeed={0.9}

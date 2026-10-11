@@ -1,17 +1,19 @@
 /**
  * HTML-подписи на плане (в слое, сдвинутом вместе с видом): плашки стен
  * «A · 4,50 м» с вводом длины по клику, расстояния выделенного проёма до
- * углов (см), подсказка участка плинтуса, угол выделенной вершины.
+ * углов (см), подсказка участка плинтуса, угол выделенной вершины,
+ * невидимые ручки углов и проёмов для клавиатуры.
  */
-import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { cornerAt, normalize } from "../domain/geometry";
+import { describeOpening } from "../domain/openings";
 import { MAX_ROOM_EXTENT, MIN_WALL } from "../domain/roomEdit";
 import type { Opening, Room, Wall } from "../domain/types";
 import { formatLength, formatNumber, fromMeters, parseLength, roundTo, type LengthUnit } from "../domain/units";
 import { useAppStore } from "../state/store";
 import { toast } from "../ui/kit";
 import { onWall, uprightAngle, type SkirtLine } from "./geom";
-import { usePlanUi } from "./planUi";
+import { keepFocusInPlan, selectOnPlan, usePlanUi } from "./planUi";
 
 const activeRoom = (): Room => {
   const s = useAppStore.getState();
@@ -26,12 +28,15 @@ function InlineInput({
   onCommit,
   onClose,
   label,
+  chipKey,
 }: {
   value: number;
   unit: LengthUnit;
   onCommit: (m: number) => void;
   onClose: () => void;
   label: string;
+  /** data-chip плашки, на которую вернуть фокус после Enter/Esc. */
+  chipKey: string;
 }) {
   const digits = unit === "m" ? 2 : 0;
   const initial = formatNumber(roundTo(fromMeters(value, unit), digits), digits, { trim: unit !== "m" }).replace(/\s/g, "");
@@ -41,13 +46,22 @@ function InlineInput({
   const wrapRef = useRef<HTMLSpanElement>(null);
   const [nudge, setNudge] = useState<{ x: number; y: number } | null>(null);
   const done = useRef(false);
+  /** Закрыли с клавиатуры — фокус обратно на плашку (а не на <body>). */
+  const refocus = useRef(false);
 
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     el.focus({ preventScroll: true });
     el.select();
-  }, []);
+    const root = el.closest<HTMLElement>(".pl-root");
+    return () => {
+      if (!refocus.current || !root) return;
+      // Плашка уже на месте поля (тот же коммит); плашки нет (проём упёрся в угол) — на план.
+      const chip = root.querySelector<HTMLElement>(`[data-chip="${chipKey}"]`);
+      (chip ?? root).focus({ preventScroll: true });
+    };
+  }, [chipKey]);
 
   // Поле у края плана (плашка у края экрана, повёрнутая плашка) — целиком в видимую область.
   useLayoutEffect(() => {
@@ -82,8 +96,15 @@ function InlineInput({
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     e.stopPropagation();
-    if (e.key === "Enter") commit(false);
-    else if (e.key === "Escape") {
+    // preventDefault: фокус уходит на плашку ещё в этом keydown — без него её
+    // «нажал» бы тот же Enter, и поле открылось бы снова.
+    if (e.key === "Enter" || e.key === "Escape") e.preventDefault();
+    if (e.key === "Enter") {
+      refocus.current = true;
+      commit(false);
+      if (!done.current) refocus.current = false;
+    } else if (e.key === "Escape") {
+      refocus.current = true;
       done.current = true;
       onClose();
     }
@@ -318,6 +339,11 @@ export const WallLabels = memo(function WallLabels({
         const key = `wall:${w.id}`;
         const ang = along ? uprightAngle(w.dir) : 0;
         const style = { left: c.x * s, top: c.y * s };
+        // Наружу от стены в системе плашки: туда расширяем зону касания (к стене — нет, там тап по стене).
+        const a = (-ang * Math.PI) / 180;
+        const ox = w.normalOut.x * Math.cos(a) - w.normalOut.y * Math.sin(a);
+        const oy = w.normalOut.x * Math.sin(a) + w.normalOut.y * Math.cos(a);
+        const out = Math.abs(oy) >= Math.abs(ox) ? (oy < 0 ? "up" : "down") : ox < 0 ? "left" : "right";
         const rotStyle =
           Math.abs(ang) > 0.5 ? { ...style, transform: `translate(-50%, -50%) rotate(${Math.round(ang * 10) / 10}deg)` } : style;
         if (editing === key) {
@@ -327,6 +353,7 @@ export const WallLabels = memo(function WallLabels({
                 value={w.length}
                 unit="m"
                 label={`Длина стены ${w.label}, м`}
+                chipKey={key}
                 onCommit={(v) => commit(w, v)}
                 onClose={() => usePlanUi.getState().setEditing(null)}
               />
@@ -342,12 +369,15 @@ export const WallLabels = memo(function WallLabels({
             style={rotStyle}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => {
-              useAppStore.getState().select({ type: "wall", roomId: room.id, wallId: w.id });
+              selectOnPlan({ type: "wall", roomId: room.id, wallId: w.id });
               usePlanUi.getState().setEditing(key);
             }}
           >
             <button
               type="button"
+              data-chip={key}
+              data-plan-key={key}
+              data-out={out}
               className={`pl-chip pl-chip--wall${compact ? " is-compact" : ""}${tone}`}
               title={compact ? `Стена ${w.label} · ${formatLength(w.length)} — изменить` : `Стена ${w.label} — изменить длину`}
               aria-label={`Стена ${w.label}, ${formatLength(w.length)}. Изменить длину`}
@@ -433,16 +463,53 @@ export function openingDimItems(o: Opening, w: Wall, s: number): OpeningDimItem[
   return items;
 }
 
+/**
+ * Где поставить плашку размера проёма (вдоль стены и вглубь комнаты, м),
+ * чтобы она не легла на плашку стены: у входящего угла плашка, вынесенная
+ * за угол, попадает к соседней стене. Пробуем ряд глубже, затем — над самим
+ * коротким участком (ещё на ряд глубже), затем два ряда; иначе — как было.
+ */
+export function dimChipPos(
+  w: Wall,
+  it: OpeningDimItem,
+  perp: number,
+  s: number,
+  labels: WallLabelLayout,
+): { along: number; perp: number } {
+  const hw = it.chipPx / 2 + 3;
+  const hh = CHIP_H / 2 + 3;
+  const row = (CHIP_H + 4) / s;
+  const free = (along: number, p: number) => {
+    const c = onWall(w, along, p);
+    const x = c.x * s;
+    const y = c.y * s;
+    for (const spot of labels.values()) {
+      const r = spot.rect;
+      if (r.x0 < x + hw && r.x1 > x - hw && r.y0 < y + hh && r.y1 > y - hh) return false;
+    }
+    return true;
+  };
+  const candidates = [
+    { along: it.chipAlong, perp },
+    { along: it.chipAlong, perp: perp + row },
+    ...(it.tight ? [{ along: (it.from + it.to) / 2, perp: perp + row }] : []),
+    { along: it.chipAlong, perp: perp + 2 * row },
+  ];
+  return candidates.find((c) => free(c.along, c.perp)) ?? candidates[0];
+}
+
 export const OpeningDimChips = memo(function OpeningDimChips({
   room,
   walls,
   s,
   dimPerp,
+  labels,
 }: {
   room: Room;
   walls: readonly Wall[];
   s: number;
   dimPerp: number;
+  labels: WallLabelLayout;
 }) {
   const selId = useAppStore((st) =>
     st.selection?.type === "opening" && st.selection.roomId === room.id ? st.selection.openingId : null,
@@ -458,7 +525,8 @@ export const OpeningDimChips = memo(function OpeningDimChips({
   return (
     <>
       {items.map((it) => {
-        const c = onWall(w, it.chipAlong, perp);
+        const at = dimChipPos(w, it, perp, s, labels);
+        const c = onWall(w, at.along, at.perp);
         const style = { left: c.x * s, top: c.y * s };
         if (editing === it.key) {
           return (
@@ -467,6 +535,7 @@ export const OpeningDimChips = memo(function OpeningDimChips({
                 value={it.value}
                 unit="cm"
                 label={`${it.title}, см`}
+                chipKey={it.key}
                 onClose={() => usePlanUi.getState().setEditing(null)}
                 onCommit={(v) => {
                   const off = it.apply(v);
@@ -490,6 +559,8 @@ export const OpeningDimChips = memo(function OpeningDimChips({
           >
             <button
               type="button"
+              data-chip={it.key}
+              data-plan-key={`opening:${o.id}`}
               className={`pl-chip pl-chip--dim${it.tight ? " is-tight" : ""}`}
               title={`${it.title} (как видно из комнаты) — изменить`}
               aria-label={`${it.title}: ${formatLength(it.value, "cm")}. Изменить`}
@@ -500,6 +571,97 @@ export const OpeningDimChips = memo(function OpeningDimChips({
         );
       })}
     </>
+  );
+});
+
+/* ------------------------- Ручки для клавиатуры ------------------------- */
+
+/** «90°», «135,5°» */
+export const formatAngle = (deg: number): string => `${formatNumber(Math.round(deg * 10) / 10, 1, { trim: true })}°`;
+
+/**
+ * Ручка объекта плана для клавиатуры и скринридера: невидима, пока не в
+ * фокусе (мышь и палец работают с SVG под ней). Enter — выбрать и открыть
+ * панель действий, стрелки — сдвинуть, Delete — удалить.
+ */
+function KeyHandle({
+  planKey,
+  label,
+  x,
+  y,
+  kind,
+  onPick,
+}: {
+  planKey: string;
+  label: string;
+  x: number;
+  y: number;
+  kind: "point" | "opening";
+  onPick: (fromKeyboard: boolean) => void;
+}) {
+  const elRef = useRef<HTMLButtonElement | null>(null);
+  // Ручку удалили (Delete) с фокусом на ней — фокус остаётся на плане.
+  const ref = useCallback((el: HTMLButtonElement | null) => {
+    if (!el) keepFocusInPlan(elRef.current);
+    elRef.current = el;
+  }, []);
+  return (
+    <button
+      ref={ref}
+      type="button"
+      className={`pl-key pl-key--${kind}`}
+      data-plan-key={planKey}
+      style={{ left: x, top: y }}
+      aria-label={label}
+      onClick={(e) => onPick(e.detail === 0)}
+    />
+  );
+}
+
+export const KeyHandles = memo(function KeyHandles({
+  room,
+  walls,
+  s,
+}: {
+  room: Room;
+  walls: readonly Wall[];
+  s: number;
+}) {
+  const n = room.points.length;
+  return (
+    <div className="pl-keys">
+      {room.points.map((p, i) => {
+        const c = cornerAt(room, i);
+        const what = c.kind === "straight" ? "точка на стене" : formatAngle(c.angle);
+        return (
+          <KeyHandle
+            key={p.id}
+            planKey={`point:${p.id}`}
+            kind="point"
+            label={`Угол ${i + 1} из ${n}, ${what}`}
+            x={p.x * s}
+            y={p.y * s}
+            onPick={(kb) => selectOnPlan({ type: "point", roomId: room.id, pointId: p.id }, kb)}
+          />
+        );
+      })}
+      {room.openings.map((o) => {
+        const w = walls.find((x) => x.id === o.wallId);
+        if (!w) return null;
+        const c = onWall(w, o.offset + o.width / 2, -w.thickness / 2);
+        return (
+          <KeyHandle
+            key={o.id}
+            planKey={`opening:${o.id}`}
+            kind="opening"
+            label={`${describeOpening(o)}, стена ${w.label}`}
+            x={c.x * s}
+            y={c.y * s}
+            onPick={(kb) => selectOnPlan({ type: "opening", roomId: room.id, openingId: o.id }, kb)}
+          />
+        );
+      })}
+    </div>
   );
 });
 

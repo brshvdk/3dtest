@@ -8,7 +8,7 @@ import { memo } from "react";
 import type { Room, Vec2, Wall } from "../domain/types";
 import { useAppStore } from "../state/store";
 import { onWall, openingExtent, polysToPath, r, wallDimLines, type SkirtLine } from "./geom";
-import { openingDimItems, openingDimPerp, type WallLabelLayout } from "./Labels";
+import { dimChipPos, openingDimItems, openingDimPerp, type WallLabelLayout } from "./Labels";
 import { usePlanUi } from "./planUi";
 
 const pts = (poly: readonly Vec2[], s: number): string =>
@@ -47,6 +47,8 @@ export interface SelectionLayerProps {
   /** м от внутренней грани до размерных линий проёма. */
   dimPerp: number;
   coarse: boolean;
+  /** Плашки стен: плашку размера проёма, вынесенную за угол, отводим от них. */
+  labels: WallLabelLayout;
 }
 
 export const SelectionLayer = memo(function SelectionLayer({
@@ -56,6 +58,7 @@ export const SelectionLayer = memo(function SelectionLayer({
   s,
   dimPerp,
   coarse,
+  labels,
 }: SelectionLayerProps) {
   const sel = useRoomSelection(room.id);
   const hover = usePlanUi((u) => u.hover);
@@ -92,10 +95,12 @@ export const SelectionLayer = memo(function SelectionLayer({
       let d = "";
       for (const it of openingDimItems(o, w, s)) {
         d += dimPath(w, it.from, it.to, perp, s);
-        if (it.tight) {
-          // Выносная линия к плашке за пределами короткого участка.
-          const p = onWall(w, it.chipAlong < it.from ? it.from : it.to, perp);
-          const q = onWall(w, it.chipAlong, perp);
+        const at = dimChipPos(w, it, perp, s, labels);
+        if (it.tight || at.perp !== perp) {
+          // Выносная линия к плашке за пределами короткого участка (или отведённой от плашки стены).
+          const along = at.along < it.from ? it.from : at.along > it.to ? it.to : at.along;
+          const p = onWall(w, along, perp);
+          const q = onWall(w, at.along, at.perp);
           d += `M${r(p.x * s)} ${r(p.y * s)}L${r(q.x * s)} ${r(q.y * s)}`;
         }
       }

@@ -72,9 +72,21 @@ p {
   border: 0;
 }
 
+/* Видимый фокус клавиатуры: outline не спорит с box-shadow компонентов
+   (активные вкладки, сегменты, образцы цвета) и даёт контраст ≥ 3:1. */
 :focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* iOS Safari увеличивает страницу при фокусе на поле со шрифтом < 16 px.
+   :not() поднимает специфичность выше одиночного класса модулей. */
+@media (pointer: coarse) {
+  input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"]),
+  select,
+  textarea {
+    font-size: 16px;
+  }
 }
 
 /* Скроллбары */

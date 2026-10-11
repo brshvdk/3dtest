@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useAppStore } from "../state/store";
 import { buildShareUrl, encodeProject } from "../domain/share";
-import { Icon, IconButton, toast } from "../ui/kit";
+import { pluralize } from "../domain/units";
+import { Icon, IconButton, MenuButton, toast, useIsMobile, type MenuEntry } from "../ui/kit";
 import { useTheme } from "./theme";
+import { openArchived, startNewProject, useArchive } from "./projects";
 
 const MODULES = [
   { id: "skirting", name: "Плинтус", ready: true },
@@ -11,6 +13,13 @@ const MODULES = [
   { id: "wallpaper", name: "Обои", ready: false },
   { id: "tile", name: "Плитка", ready: false },
 ];
+
+const dateFmt = new Intl.DateTimeFormat("ru-RU", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -23,12 +32,14 @@ async function copyText(text: string): Promise<boolean> {
 
 export function Header() {
   const projectName = useAppStore((s) => s.project.name);
+  const projectId = useAppStore((s) => s.project.id);
   const renameProject = useAppStore((s) => s.renameProject);
   const canUndo = useAppStore((s) => s.past.length > 0);
   const canRedo = useAppStore((s) => s.future.length > 0);
   const undo = useAppStore((s) => s.undo);
   const redo = useAppStore((s) => s.redo);
-  const newProject = useAppStore((s) => s.newProject);
+  const archive = useArchive();
+  const isMobile = useIsMobile();
   const { dark, toggle } = useTheme();
   const [editing, setEditing] = useState(false);
 
@@ -43,16 +54,41 @@ export function Header() {
     }
   };
 
-  const startNew = () => {
-    if (
-      window.confirm(
-        "Начать новый проект? Текущий можно будет вернуть кнопкой «Отменить».",
-      )
-    ) {
-      newProject();
-      toast("Создан новый проект", "info");
-    }
-  };
+  const recent = archive.filter((e) => e.project.id !== projectId);
+  const menu: MenuEntry[] = [
+    { id: "new", label: "Новый проект", icon: "file-new", onSelect: startNewProject },
+    { id: "rename", label: "Переименовать проект", icon: "edit", onSelect: () => setEditing(true) },
+    ...(isMobile
+      ? ([
+          { id: "print", label: "Печать / PDF", icon: "print", onSelect: () => window.print() },
+          {
+            id: "theme",
+            label: dark ? "Светлая тема" : "Тёмная тема",
+            icon: dark ? "sun" : "moon",
+            onSelect: toggle,
+          },
+        ] satisfies MenuEntry[])
+      : []),
+    ...(recent.length
+      ? ([
+          { id: "sep", separator: true },
+          { id: "recent", heading: "Недавние проекты" },
+          ...recent.map(
+            (e): MenuEntry => ({
+              id: `p-${e.project.id}`,
+              label: e.project.name,
+              hint: `${e.project.rooms.length} ${pluralize(e.project.rooms.length, [
+                "комната",
+                "комнаты",
+                "комнат",
+              ])} · ${dateFmt.format(e.project.updatedAt)}`,
+              icon: "history",
+              onSelect: () => openArchived(e.project.id),
+            }),
+          ),
+        ] satisfies MenuEntry[])
+      : []),
+  ];
 
   return (
     <header className="app-header">
@@ -90,6 +126,7 @@ export function Header() {
             defaultValue={projectName}
             maxLength={60}
             aria-label="Название проекта"
+            onFocus={(e) => e.currentTarget.select()}
             onBlur={(e) => {
               const v = e.target.value.trim();
               if (v && v !== projectName) renameProject(v);
@@ -105,7 +142,8 @@ export function Header() {
             type="button"
             className="project-name"
             onClick={() => setEditing(true)}
-            title="Переименовать проект"
+            title={`${projectName} — переименовать`}
+            aria-label={`Проект «${projectName}», переименовать`}
           >
             <span>{projectName}</span>
             <Icon name="edit" size={14} />
@@ -117,10 +155,18 @@ export function Header() {
         <IconButton icon="undo" label="Отменить (Ctrl+Z)" onClick={undo} disabled={!canUndo} />
         <IconButton icon="redo" label="Повторить (Ctrl+Shift+Z)" onClick={redo} disabled={!canRedo} />
         <span className="app-header__sep" />
-        <IconButton icon="file-new" label="Новый проект" onClick={startNew} />
         <IconButton icon="link" label="Поделиться ссылкой" onClick={share} />
-        <IconButton icon="print" label="Печать / PDF" onClick={() => window.print()} />
-        <IconButton icon={dark ? "sun" : "moon"} label={dark ? "Светлая тема" : "Тёмная тема"} onClick={toggle} />
+        {!isMobile ? (
+          <>
+            <IconButton icon="print" label="Печать / PDF" onClick={() => window.print()} />
+            <IconButton
+              icon={dark ? "sun" : "moon"}
+              label={dark ? "Светлая тема" : "Тёмная тема"}
+              onClick={toggle}
+            />
+          </>
+        ) : null}
+        <MenuButton icon="more" label="Меню проекта" items={menu} />
       </div>
     </header>
   );

@@ -29,7 +29,7 @@ import {
 } from "../domain/project";
 import * as edit from "../domain/roomEdit";
 import { clearShareHash, decodeProject, readShareHash } from "../domain/share";
-import { getCatalogProduct } from "../domain/skirtingCatalog";
+import { getCatalogProduct, priceForLength } from "../domain/skirtingCatalog";
 import type {
   AccessoryPrices,
   Appearance,
@@ -231,6 +231,15 @@ function mergeOverride(
     if (key in patch) setOverrideKey(next, key, patch[key]);
   }
   if (typeof next.color === "string") next.color = next.color.toLowerCase();
+  // Своя цена — цена планки своей длины: при смене длины без новой цены
+  // сохраняем цену погонного метра (550 ₽ за 2,4 м → 642 ₽ за 2,8 м).
+  if ("length" in patch && !("price" in patch) && typeof next.price === "number") {
+    const was = current?.length ?? base.length;
+    const now = next.length ?? base.length;
+    if (was > 0 && now > 0 && Number.isFinite(was) && Number.isFinite(now) && was !== now) {
+      next.price = Math.round((next.price / was) * now);
+    }
+  }
   if (patch.prices) {
     const prices: AccessoryPrices = { ...base.prices, ...current?.prices };
     for (const k of Object.keys(base.prices) as Array<keyof AccessoryPrices>) {
@@ -240,8 +249,10 @@ function mergeOverride(
     next.prices = prices;
   }
   for (const key of SCALAR_OVERRIDE_KEYS) {
-    if (next[key] === base[key]) delete next[key];
+    if (key !== "price" && next[key] === base[key]) delete next[key];
   }
+  // Цена без правки следует за длиной планки (priceForLength) — совпавшая с ней не правка.
+  if (next.price === priceForLength(base, next.length ?? base.length)) delete next.price;
   const p = next.prices;
   if (p && (Object.keys(base.prices) as Array<keyof AccessoryPrices>).every((k) => p[k] === base.prices[k])) {
     delete next.prices;

@@ -17,6 +17,24 @@ function isTyping(target: EventTarget | null): boolean {
   );
 }
 
+/** Поля без своей истории ввода: select, флажки, цвет… */
+const NO_TEXT_INPUT = new Set(["checkbox", "radio", "range", "color", "button", "submit", "reset", "file"]);
+
+/**
+ * Ctrl+Z / Ctrl+Y в поле: свой undo браузера нужен, только пока в поле есть
+ * несохранённый текст. Select, флажки и поля кита без правок (data-pristine —
+ * NumericInput, TextField) отдают сочетание истории проекта.
+ */
+function ownsUndo(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.tagName === "SELECT") return false;
+  if (target instanceof HTMLInputElement) {
+    if (NO_TEXT_INPUT.has(target.type)) return false;
+    return !target.hasAttribute("data-pristine");
+  }
+  return isTyping(target);
+}
+
 export function useHotkeys() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -25,14 +43,14 @@ export function useHotkeys() {
       const key = e.key.toLowerCase();
 
       if (mod && (key === "z" || key === "я")) {
-        if (isTyping(e.target)) return;
+        if (ownsUndo(e.target)) return;
         e.preventDefault();
         if (e.shiftKey) s.redo();
         else s.undo();
         return;
       }
       if (mod && (key === "y" || key === "н")) {
-        if (isTyping(e.target)) return;
+        if (ownsUndo(e.target)) return;
         e.preventDefault();
         s.redo();
         return;

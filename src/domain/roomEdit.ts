@@ -17,6 +17,7 @@ import {
   add,
   bbox,
   clamp,
+  cornerAt,
   cross,
   distance,
   dot,
@@ -478,6 +479,36 @@ function presetCandidates(kind: OpeningKind, presetId?: string): string[] {
   return [main, ...narrower];
 }
 
+/** Виды, которым мебель в углу перекрыла бы проход боковиной. */
+const BLOCKED_BY_FURNITURE: OpeningKind[] = ["door", "passage", "balcony"];
+
+/**
+ * offset мебели в углу стены: у начала (0) или у конца (L − width), если
+ * угол внутренний, место на стене свободно, а боковина (глубина + зазор)
+ * не загораживает дверь или проём на соседней стене. null — свободного угла нет.
+ */
+function cornerSpot(room: Room, walls: Wall[], wall: Wall, o: Opening): number | null {
+  const n = walls.length;
+  const ends = [
+    { offset: 0, corner: wall.index, adj: walls[(wall.index - 1 + n) % n], adjAtEnd: true },
+    { offset: wall.length - o.width, corner: (wall.index + 1) % n, adj: walls[(wall.index + 1) % n], adjAtEnd: false },
+  ];
+  for (const e of ends) {
+    if (e.offset < -1e-9 || cornerAt(room, e.corner).kind !== "inner") continue;
+    const spot = findFreeSpot(room, wall.id, o.width, true, { near: e.offset, strict: true });
+    if (spot === null || Math.abs(spot - e.offset) > 1e-4) continue;
+    const reach = Math.max(0, o.depth) + FREE_GAP;
+    const [from, to] = e.adjAtEnd ? [e.adj.length - reach, e.adj.length] : [0, reach];
+    const blocked = room.openings.some((x) => {
+      if (x.wallId !== e.adj.id || !BLOCKED_BY_FURNITURE.includes(x.kind)) return false;
+      const fp = footprint(x);
+      return fp.from < to && fp.to > from;
+    });
+    if (!blocked) return spot;
+  }
+  return null;
+}
+
 const appendOpening = (room: Room, o: Opening): { room: Room; openingId: string } => {
   const placed = clampOpening(room, o);
   return { room: { ...room, openings: [...room.openings, placed] }, openingId: placed.id };
@@ -502,6 +533,15 @@ export function addOpening(
 
   // Сначала ищем место, где проём помещается вместе с наличниками, затем — без них.
   const presets = presetCandidates(kind, opts.presetId);
+  if (kind === "furniture" && near === undefined) {
+    // Гарнитур и шкафы стоят в углу, а не посреди стены с обрезками плинтуса по бокам.
+    const proto = createOpening(kind, walls[0].id, 0, presets[0]);
+    const all = getWalls(room);
+    for (const wall of walls) {
+      const offset = cornerSpot(room, all, wall, proto);
+      if (offset !== null) return appendOpening(room, { ...proto, wallId: wall.id, offset });
+    }
+  }
   for (const strict of [true, false]) {
     for (const presetId of presets) {
       const proto = createOpening(kind, walls[0].id, 0, presetId);
@@ -830,7 +870,23 @@ export function applyTemplate(
       if (old.thickness !== undefined) q.thickness = old.thickness;
       return q;
     });
-    return clampOpenings({ ...room, points, shape: templateId });
+    const next = clampOpenings({ ...room, points, shape: templateId });
+    // Проём, который не поместился на прежнее место, — не к краю стены, а в свободное место по центру.
+    const before = new Map(room.openings.map((o) => [o.id, o]));
+    let moved = next;
+    for (const o of next.openings) {
+      const old = before.get(o.id);
+      if (!old || (Math.abs(o.offset - old.offset) < 1e-6 && Math.abs(o.width - old.width) < 1e-6)) continue;
+      const offset = findFreeSpot(moved, o.wallId, o.width, true, {
+        extension: casingExtension(o),
+        excludeId: o.id,
+        strict: true,
+      });
+      if (offset !== null && offset !== o.offset) {
+        moved = { ...moved, openings: moved.openings.map((x) => (x.id === o.id ? { ...x, offset } : x)) };
+      }
+    }
+    return moved;
   }
 
   const oldWalls = getWalls(room);
@@ -842,16 +898,27 @@ export function applyTemplate(
     const extension = casingExtension(o);
     let placed: Opening | null = null;
     if (target) {
-      const offset = findFreeSpot(next, target.id, o.width, true, { extension, near: o.offset });
+      // Прежнее место — только если проём встаёт туда целиком, с наличниками;
+      // иначе — по центру стены, а не вплотную к углу (наличник за углом).
+      const keep = findFreeSpot(next, target.id, o.width, true, { extension, near: o.offset, strict: true });
+      const offset =
+        keep !== null && Math.abs(keep - o.offset) < 1e-6
+          ? keep
+          : (findFreeSpot(next, target.id, o.width, true, { extension, strict: true }) ??
+            findFreeSpot(next, target.id, o.width, true, { extension, near: o.offset }));
       if (offset !== null) placed = { ...o, wallId: target.id, offset };
     }
     if (!placed) {
-      for (const w of rankWalls(next, o.kind)) {
-        const offset = findFreeSpot(next, w.id, o.width, true, { extension });
-        if (offset !== null) {
-          placed = { ...o, wallId: w.id, offset };
-          break;
+      const ranked = rankWalls(next, o.kind);
+      for (const strict of [true, false]) {
+        for (const w of ranked) {
+          const offset = findFreeSpot(next, w.id, o.width, true, { extension, strict });
+          if (offset !== null) {
+            placed = { ...o, wallId: w.id, offset };
+            break;
+          }
         }
+        if (placed) break;
       }
     }
     if (placed) next = appendOpening(next, placed).room;

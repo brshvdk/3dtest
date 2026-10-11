@@ -43,8 +43,7 @@ test("добавление двери уменьшает длину плинту
   expect(await readNet()).not.toBe(before);
 });
 
-test("отмена и повтор работают", async ({ page, isMobile }) => {
-  test.skip(isMobile, "кнопки истории скрыты в узкой шапке — проверяем на десктопе");
+test("отмена и повтор работают", async ({ page }) => {
   await fresh(page);
   await page.getByRole("tab", { name: /Проёмы/ }).click();
   const items = page.getByRole("list", { name: "Проёмы комнаты" }).getByRole("listitem");
@@ -63,4 +62,51 @@ test("3D-вид загружается без ошибок", async ({ page }) =>
   await expect(page.locator("canvas").first()).toBeVisible({ timeout: 15_000 });
   await page.waitForTimeout(1500);
   expect(errors, errors.join("\n")).toHaveLength(0);
+});
+
+test("«Новый проект»: прежний открывается из меню и после перезагрузки", async ({ page }) => {
+  await fresh(page);
+  const name = page.locator(".project-name span");
+  await expect(name).toHaveText("Моя квартира");
+  await page.getByRole("button", { name: "Меню проекта" }).click();
+  await page.getByRole("menuitem", { name: "Новый проект" }).click();
+  await expect(name).not.toHaveText("Моя квартира");
+  await page.waitForTimeout(500);
+  await page.reload();
+  await page.getByRole("button", { name: "Меню проекта" }).click();
+  await page.getByRole("menuitem", { name: /Моя квартира/ }).click();
+  await expect(name).toHaveText("Моя квартира");
+});
+
+test("Ctrl+Z в числовом поле после стрелок откатывает правку проекта", async ({ page }) => {
+  await fresh(page);
+  const field = page.getByLabel("Длина (стена A)");
+  await field.click();
+  await expect(field).toHaveValue("4,50");
+  await page.keyboard.press("ArrowUp");
+  await expect(field).toHaveValue("4,55");
+  await page.keyboard.press("Control+z");
+  await expect(field).toHaveValue("4,50");
+});
+
+test("ввод сразу после клика по полю не теряет цифры", async ({ page }) => {
+  await fresh(page);
+  const field = page.getByLabel("Длина (стена A)");
+  await field.click();
+  await page.keyboard.type("5,2");
+  await page.keyboard.press("Enter");
+  await expect(field).toHaveValue("5,20");
+});
+
+test("стрелки двигают стену сразу после клика по ней на плане", async ({ page, isMobile }) => {
+  test.skip(isMobile, "клавиатурный сценарий для мыши");
+  await fresh(page);
+  const field = page.getByLabel("Длина (стена A)");
+  await expect(field).toHaveValue("4,50");
+  // Правая стена (B): клик у внешнего края контура комнаты, на середине высоты.
+  const box = (await page.locator(".pl-wall").first().boundingBox())!;
+  await page.mouse.click(box.x + box.width - 4, box.y + box.height / 2);
+  await expect(page.locator(".pl-root")).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(field).toHaveValue("4,51");
 });

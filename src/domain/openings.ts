@@ -59,7 +59,7 @@ export const OPENING_KINDS: OpeningKindMeta[] = [
     kind: "furniture",
     name: "Без плинтуса",
     addLabel: "Мебель",
-    hint: "Кухня, встроенный шкаф, ванна — участок стены, где плинтус не нужен.",
+    hint: "Кухня, шкаф, ванна — плинтус не нужен вдоль корпуса, а в углу — и за боковиной, на глубину корпуса.",
   },
 ];
 
@@ -81,6 +81,8 @@ export interface OpeningPreset {
   elevation: number;
   /** Дополнительные поля, специфичные для пресета. */
   extra?: Partial<Opening>;
+  /** Как называют в магазине («Дверь 80» — по ширине полотна), для подписей. */
+  label?: string;
 }
 
 /**
@@ -89,14 +91,14 @@ export interface OpeningPreset {
  * Входные — по размеру блока (860 / 960 мм).
  */
 export const DOOR_PRESETS: OpeningPreset[] = [
-  { id: "door-60", kind: "door", name: "Межкомнатная 60", hint: "полотно 600×2000 мм — санузел, кладовая", width: 0.67, height: 2.07, elevation: 0 },
-  { id: "door-70", kind: "door", name: "Межкомнатная 70", hint: "полотно 700×2000 мм — кухня, ванная", width: 0.77, height: 2.07, elevation: 0 },
-  { id: "door-80", kind: "door", name: "Межкомнатная 80", hint: "полотно 800×2000 мм — жилые комнаты", width: 0.87, height: 2.07, elevation: 0 },
-  { id: "door-90", kind: "door", name: "Межкомнатная 90", hint: "полотно 900×2000 мм — широкая", width: 0.97, height: 2.07, elevation: 0 },
-  { id: "door-2x60", kind: "door", name: "Двустворчатая 120", hint: "2 полотна по 600×2000 мм", width: 1.27, height: 2.07, elevation: 0, extra: { leaves: 2 } },
-  { id: "door-2x70", kind: "door", name: "Двустворчатая 140", hint: "2 полотна по 700×2000 мм", width: 1.47, height: 2.07, elevation: 0, extra: { leaves: 2 } },
-  { id: "door-entry-86", kind: "door", name: "Входная 860", hint: "блок 860×2050 мм", width: 0.9, height: 2.1, elevation: 0 },
-  { id: "door-entry-96", kind: "door", name: "Входная 960", hint: "блок 960×2050 мм", width: 1.0, height: 2.1, elevation: 0 },
+  { id: "door-60", kind: "door", name: "Межкомнатная 60", hint: "полотно 600×2000 мм — санузел, кладовая", width: 0.67, height: 2.07, elevation: 0, label: "Дверь 60" },
+  { id: "door-70", kind: "door", name: "Межкомнатная 70", hint: "полотно 700×2000 мм — кухня, ванная", width: 0.77, height: 2.07, elevation: 0, label: "Дверь 70" },
+  { id: "door-80", kind: "door", name: "Межкомнатная 80", hint: "полотно 800×2000 мм — жилые комнаты", width: 0.87, height: 2.07, elevation: 0, label: "Дверь 80" },
+  { id: "door-90", kind: "door", name: "Межкомнатная 90", hint: "полотно 900×2000 мм — широкая", width: 0.97, height: 2.07, elevation: 0, label: "Дверь 90" },
+  { id: "door-2x60", kind: "door", name: "Двустворчатая 120", hint: "2 полотна по 600×2000 мм", width: 1.27, height: 2.07, elevation: 0, extra: { leaves: 2 }, label: "Дверь 2×60" },
+  { id: "door-2x70", kind: "door", name: "Двустворчатая 140", hint: "2 полотна по 700×2000 мм", width: 1.47, height: 2.07, elevation: 0, extra: { leaves: 2 }, label: "Дверь 2×70" },
+  { id: "door-entry-86", kind: "door", name: "Входная 860", hint: "блок 860×2050 мм", width: 0.9, height: 2.1, elevation: 0, label: "Входная дверь 860" },
+  { id: "door-entry-96", kind: "door", name: "Входная 960", hint: "блок 960×2050 мм", width: 1.0, height: 2.1, elevation: 0, label: "Входная дверь 960" },
 ];
 
 /** Типовые оконные проёмы жилых домов; подоконник 850 мм от пола. */
@@ -330,11 +332,27 @@ export function windowSashCount(width: number): number {
   return 3;
 }
 
-/** «Дверь 87×207 см» */
+/**
+ * Подпись проёма — как его называют в магазине и в замерах:
+ * «Дверь 80 (проём 87×207 см)», своя дверь — «Дверь, проём 95×207 см»;
+ * мебель — длина вдоль стены × глубина («Кухня 240×60 см»: для плинтуса
+ * важна глубина, а не высота); остальное — ширина × высота («Окно 130×140 см»).
+ */
 export function describeOpening(o: Opening): string {
-  const name =
-    o.kind === "furniture" && o.label ? o.label : OPENING_KIND_META[o.kind].name;
-  const w = Math.round(o.width * 100);
-  const h = Math.round(o.height * 100);
-  return `${name} ${w}×${h} см`;
+  const cm = (m: number) => Math.round(m * 100);
+  const size = `${cm(o.width)}×${cm(o.height)} см`;
+  switch (o.kind) {
+    case "door": {
+      const preset = getPreset(o.presetId);
+      return preset?.kind === "door" && preset.label ? `${preset.label} (проём ${size})` : `Дверь, проём ${size}`;
+    }
+    case "furniture": {
+      const name = o.label.trim() || OPENING_KIND_META.furniture.name;
+      return o.depth > 0 ? `${name} ${cm(o.width)}×${cm(o.depth)} см` : `${name} ${cm(o.width)} см`;
+    }
+    case "passage":
+      return `${o.arch ? "Арка" : OPENING_KIND_META.passage.name} ${size}`;
+    default:
+      return `${OPENING_KIND_META[o.kind].name} ${size}`;
+  }
 }

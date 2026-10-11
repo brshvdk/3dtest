@@ -28,6 +28,39 @@ export interface PlanSvgProps {
 /** px: на сколько размерные линии отстоят от стены, и место под них. */
 const DIM_GAP = 12;
 const DIM_SPACE = 30;
+/** px: строка подписи «Стены: D · 1,50 м» под схемой. */
+const LEGEND_ROW = 13;
+const LEGEND_HEAD = "Стены:";
+
+/** Оценка ширины подписи (10,5 px, цифры табличные), px. */
+const textWidth = (t: string): number => t.length * 5.9 + 4;
+
+const fullLabel = (w: Wall): string => `${w.label} · ${formatLength(w.length)}`;
+
+/** Подпись размерной линии: полная, если влезает вдоль стены; иначе буква (длина — в подписи под схемой). */
+function dimText(w: Wall, s: number): { text: string; full: boolean } {
+  const lenPx = w.length * s;
+  const full = fullLabel(w);
+  if (lenPx >= textWidth(full) + 8) return { text: full, full: true };
+  return { text: lenPx > 18 ? w.label : "", full: false };
+}
+
+/** Строки подписи «Стены: …» для стен, длина которых не уместилась на схеме. */
+function legendRows(walls: readonly Wall[], s: number, width: number): string[] {
+  const items = walls.filter((w) => !dimText(w, s).full).map(fullLabel);
+  if (!items.length) return [];
+  const rows: string[] = [];
+  let cur = LEGEND_HEAD;
+  for (const it of items) {
+    const next = cur === LEGEND_HEAD ? `${cur} ${it}` : `${cur}, ${it}`;
+    if (cur !== LEGEND_HEAD && textWidth(next) > width - 8) {
+      rows.push(`${cur},`);
+      cur = it;
+    } else cur = next;
+  }
+  rows.push(cur);
+  return rows;
+}
 
 function StaticDims({ walls, s }: { walls: readonly Wall[]; s: number }) {
   // У входящих углов линии соседних стен сходятся уголком, а не крестом.
@@ -41,8 +74,7 @@ function StaticDims({ walls, s }: { walls: readonly Wall[]; s: number }) {
         const off = w.thickness + DIM_GAP / s;
         const c = onWall(w, w.length / 2, -off);
         const ang = uprightAngle(w.dir);
-        const lenPx = w.length * s;
-        const text = lenPx > 70 ? `${w.label} · ${formatLength(w.length)}` : lenPx > 18 ? w.label : "";
+        const { text } = dimText(w, s);
         // Выносные линии и засечки 45° — только на «настоящих» концах.
         const t = 3.5;
         const k = { x: (w.dir.x + w.normalIn.x) * t, y: (w.dir.y + w.normalIn.y) * t };
@@ -96,12 +128,22 @@ export function PlanSvg({
 
   const box = useMemo(() => roomBounds(room), [room]);
   const margin = padding + (showDims ? DIM_SPACE : 4);
-  const s = Math.max(
-    1,
-    Math.min((width - 2 * margin) / Math.max(box.width, 0.5), (height - 2 * margin) / Math.max(box.height, 0.5)),
-  );
+  const fitScale = (h: number) =>
+    Math.max(1, Math.min((width - 2 * margin) / Math.max(box.width, 0.5), (h - 2 * margin) / Math.max(box.height, 0.5)));
+  // Длины коротких стен (вырез Г-комнаты и т.п.) на бумаге нужнее всего: не
+  // влезают на размерную линию — пишем их строкой под схемой, уменьшив её.
+  let s = fitScale(height);
+  let legend: string[] = [];
+  if (showDims) {
+    legend = legendRows(walls, s, width);
+    if (legend.length) {
+      s = fitScale(height - legend.length * LEGEND_ROW);
+      legend = legendRows(walls, s, width);
+    }
+  }
+  const planH = height - legend.length * LEGEND_ROW;
   const ox = width / 2 - (box.minX + box.width / 2) * s;
-  const oy = height / 2 - (box.minY + box.height / 2) * s;
+  const oy = planH / 2 - (box.minY + box.height / 2) * s;
 
   const skirtW = Math.min(4, Math.max(2, (product?.depth ?? 0.015) * s));
   const lines = useMemo(
@@ -116,7 +158,7 @@ export function PlanSvg({
       height={height}
       viewBox={`0 0 ${width} ${height}`}
       role="img"
-      aria-label={`План: ${room.name}`}
+      aria-label={`План: ${room.name}. ${walls.map(fullLabel).join(", ")}`}
     >
       <defs>
         <HatchPattern id={hatchId} />
@@ -134,6 +176,11 @@ export function PlanSvg({
         />
         {showDims ? <StaticDims walls={walls} s={s} /> : null}
       </g>
+      {legend.map((row, i) => (
+        <text key={i} className="psvg-legend" x={r(width / 2)} y={r(planH + (i + 0.5) * LEGEND_ROW)}>
+          {row}
+        </text>
+      ))}
     </svg>
   );
 }

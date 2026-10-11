@@ -7,11 +7,21 @@ import type { Project } from "../domain/types";
 import { formatMoney, formatNumber } from "../domain/units";
 import { countText, meters, pctText, stockText, unitForms } from "./format";
 
-function lineText(n: number, l: OrderLine): string {
+/** Фурнитура подбирается под серию плинтуса — в списке для магазина серию называем явно. */
+const FITTINGS = new Set<OrderLine["kind"]>(["innerCorner", "outerCorner", "endCap", "endCapLeft", "endCapRight", "connector"]);
+
+/**
+ * «2. Угол внутренний МДФ 80 (в цвет «Венге»): 4 шт × 120 ₽ = 480 ₽». Каждая строка самодостаточна:
+ * список пересылают в магазин или мессенджер, где таблицы с пометками уже нет.
+ */
+function lineText(n: number, l: OrderLine, pe: ProductEstimate): string {
   const qty = `${formatNumber(l.qty, 2, { trim: true })} ${l.unit}`;
   const price = l.unitPrice > 0 ? ` × ${formatMoney(l.unitPrice)} = ${formatMoney(l.total)}` : "";
+  const name = FITTINGS.has(l.kind) ? `${l.name} ${pe.product.shortName}` : l.name;
+  // У планок пометка — «7 по раскрою + 1 запас»: это объясняет строка «Расчёт» внизу.
+  const note = l.note && l.kind !== "plank" ? ` (${l.note})` : "";
   // Двоеточие, а не тире: в названии плинтуса тире уже есть («2,5 м — Белый»).
-  return `${n}. ${l.name}: ${qty}${price}`;
+  return `${n}. ${name}${note}: ${qty}${price}`;
 }
 
 function roomsText(pe: ProductEstimate): string {
@@ -58,7 +68,7 @@ export function buildOrderText(estimate: ProjectEstimate, project: Project): str
     out.push("");
     if (multi) out.push(`${pe.product.shortName} — ${roomsText(pe)}`);
     else out.push(roomsHeading(pe));
-    for (const l of pe.lines) out.push(lineText(++n, l));
+    for (const l of pe.lines) out.push(lineText(++n, l, pe));
     if (multi) out.push(`Сумма: ${formatMoney(pe.cost)}`);
   }
 

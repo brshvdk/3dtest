@@ -22,14 +22,15 @@ import {
 import type { BBox } from "../domain/geometry";
 import { computeRoomSkirting } from "../domain/skirtingCalc";
 import type { Room } from "../domain/types";
-import { useActiveRoom, useRoomProduct, useWalls } from "../state/hooks";
+import { getRoomWalls, useActiveRoom, useRoomProduct, useWalls } from "../state/hooks";
 import { useAppStore } from "../state/store";
 import { useMediaQuery } from "../ui/kit";
 import { ContextPanel } from "./ContextPanel";
 import { roomBounds, skirtingLines, wallCuts, wallPieces } from "./geom";
-import { AngleChip, layoutWallLabels, OpeningDimChips, SegmentTip, WallLabels } from "./Labels";
+import { AngleChip, KeyHandles, layoutWallLabels, OpeningDimChips, SegmentTip, WallLabels } from "./Labels";
 import { SelectionLayer, SkirtHoverLayer, WallDims } from "./Layers";
 import { Hint, ScaleBar, Summary, useHintHidden, ZoomControls } from "./Overlays";
+import { usePlanUi } from "./planUi";
 import { HatchPattern, RoomShapes } from "./Shapes";
 import { useInteraction, type InteractionData } from "./useInteraction";
 import {
@@ -79,15 +80,77 @@ const REVEAL_DELAY = 320;
 
 const isNarrow = (w: number, h: number) => w < NARROW || h < 380;
 
-/** Отступы при вписывании: место под плашки размеров и оверлеи (сводка, подсказка). */
-function fitPad(w: number, h: number, hint: boolean, coarse: boolean): Pad {
+/**
+ * Отступы при вписывании: место под плашки размеров и оверлеи (сводка,
+ * подсказка, лист выделенного внизу — sheetH px).
+ */
+function fitPad(w: number, h: number, hint: boolean, coarse: boolean, sheetH: number): Pad {
   // Подсказка столбиком (3 строки) выше однострочной — снизу нужно больше места под неё и плашки.
   const hintPad = hintMode(w) === "stacked" ? 128 : 100;
   // На тач-экране плашки стен стоят дальше от стены.
   const e = coarse ? 8 : 0;
-  return isNarrow(w, h)
+  const pad = isNarrow(w, h)
     ? { top: 78 + e, right: 52 + e, bottom: hint ? hintPad : 44 + e, left: 44 + e }
     : { top: 84, right: 96, bottom: hint ? hintPad : 72, left: 96 };
+  // Плашка нижней стены — над листом, а не под ним.
+  if (sheetH > 0) pad.bottom = Math.max(pad.bottom, sheetH + 16 + 44 + e);
+  return pad;
+}
+
+interface Box {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+/** Оверлеи в углах плана (сводка, кнопки масштаба) — px от левого верхнего угла плана. */
+function overlayBoxes(host: HTMLElement): Box[] {
+  const R = host.getBoundingClientRect();
+  return [...host.querySelectorAll<HTMLElement>(".pl-summary, .pl-zoom")].map((el) => {
+    const r = el.getBoundingClientRect();
+    return { x0: r.left - R.left, y0: r.top - R.top, x1: r.right - R.left, y1: r.bottom - R.top };
+  });
+}
+
+/**
+ * Вписывание, при котором плашки стен не уходят под сводку и кнопки
+ * масштаба: если уходят — по очереди добавляем отступ с каждой стороны
+ * (шагом 12 px) и берём вариант с самым крупным масштабом.
+ */
+function fitClear(
+  r: Room,
+  w: number,
+  h: number,
+  pad: Pad,
+  obstacles: readonly Box[],
+  along: boolean,
+  coarse: boolean,
+): View {
+  const box = roomBounds(r);
+  const base = fitView(box, w, h, pad);
+  if (!obstacles.length) return base;
+  const walls = getRoomWalls(r);
+  const clear = (v: View) => {
+    for (const spot of layoutWallLabels(walls, v.s, along, coarse).values()) {
+      const x0 = spot.rect.x0 + v.tx;
+      const y0 = spot.rect.y0 + v.ty;
+      const x1 = spot.rect.x1 + v.tx;
+      const y1 = spot.rect.y1 + v.ty;
+      if (obstacles.some((o) => o.x0 < x1 + 4 && o.x1 > x0 - 4 && o.y0 < y1 + 4 && o.y1 > y0 - 4)) return false;
+    }
+    return true;
+  };
+  if (clear(base)) return base;
+  for (let k = 1; k <= 6; k++) {
+    let best: View | null = null;
+    for (const side of ["top", "right", "bottom", "left"] as const) {
+      const v = fitView(box, w, h, { ...pad, [side]: pad[side] + 12 * k });
+      if (clear(v) && (!best || v.s > best.s)) best = v;
+    }
+    if (best) return best;
+  }
+  return base;
 }
 
 /** Сетка: мелкая 10 см (при достаточном масштабе) и крупная 1 м (5 м издалека). */
@@ -117,21 +180,9 @@ function Grid({ view, uid }: { view: View; uid: string }) {
 }
 
 /** Подсказка прячется, когда панель выделения прижата к низу. */
-function HintSlot({
-  coarse,
-  docked,
-  mode,
-  roomId,
-  onClose,
-}: {
-  coarse: boolean;
-  docked: boolean;
-  mode: HintMode;
-  roomId: string;
-  onClose: () => void;
-}) {
-  const hasSel = useAppStore((s) => !!s.selection && s.selection.roomId === roomId);
-  if (docked && hasSel) return null;
+function HintSlot({ coarse, mode, onClose }: { coarse: boolean; mode: HintMode; onClose: () => void }) {
+  const sheet = usePlanUi((u) => u.sheetH > 0);
+  if (sheet) return null;
   return <Hint coarse={coarse} stacked={mode === "stacked"} fromLeft={mode === "left"} onClose={onClose} />;
 }
 
@@ -155,6 +206,7 @@ export function PlanView(): JSX.Element {
   hintRef.current = !hintHidden;
   const coarseRef = useRef(coarse);
   coarseRef.current = coarse;
+  const [revealTick, setRevealTick] = useState(0);
 
   // Геометрия комнаты — мемо по ссылке на комнату/стены.
   // Плинтус считаем здесь же (а не отложенной сметой), чтобы линия шла за стеной без задержки.
@@ -191,6 +243,7 @@ export function PlanView(): JSX.Element {
     setViewState(v);
   }, []);
 
+  /** Пользователь сам двигал или масштабировал вид (пан, щипок, колесо, ±) — не перевписываем за него. */
   const userMoved = useRef(false);
   const onUserView = useCallback(() => {
     userMoved.current = true;
@@ -235,11 +288,19 @@ export function PlanView(): JSX.Element {
     [setView, stopAnimation],
   );
 
+  /** Вид, в который комната вписана целиком (с местом под плашки и оверлеи). */
+  const fitTarget = useCallback((r: Room): View | null => {
+    const { w, h } = sizeRef.current;
+    const host = hostRef.current;
+    if (!w || !h || !host) return null;
+    const pad = fitPad(w, h, hintRef.current, coarseRef.current, usePlanUi.getState().sheetH);
+    return fitClear(r, w, h, pad, overlayBoxes(host), isNarrow(w, h), coarseRef.current);
+  }, []);
+
   const fitTo = useCallback(
     (r: Room, animated: boolean) => {
-      const { w, h } = sizeRef.current;
-      if (!w || !h) return;
-      const target = fitView(roomBounds(r), w, h, fitPad(w, h, hintRef.current, coarseRef.current));
+      const target = fitTarget(r);
+      if (!target) return;
       userMoved.current = false;
       if (animated) animateTo(target);
       else {
@@ -247,15 +308,16 @@ export function PlanView(): JSX.Element {
         setView(target);
       }
     },
-    [animateTo, setView, stopAnimation],
+    [fitTarget, animateTo, setView, stopAnimation],
   );
 
   // Показ выделения: если указатель нажат — после отпускания (и только если это был клик).
   const pendingReveal = useRef<{ dx: number; dy: number } | null>(null);
+  // Сдвиг к выделению — не «пользователь двигал вид»: после клавиатуры телефона
+  // (изменение размера) и правок из панели план по-прежнему вписывается сам.
   const panBy = useCallback(
     (dx: number, dy: number) => {
       const v = viewRef.current;
-      userMoved.current = true;
       animateTo({ s: v.s, tx: v.tx + dx, ty: v.ty + dy });
     },
     [animateTo],
@@ -277,28 +339,40 @@ export function PlanView(): JSX.Element {
           panBy(p.dx, p.dy);
         }, REVEAL_DELAY);
       }
-      // Стену/угол вытянули за край экрана — после отпускания показываем комнату целиком.
-      if (edited && fitBeforeEdit.current) {
+      if (edited) {
+        // Стену/угол вытянули за край экрана — после отпускания показываем комнату целиком;
+        // иначе — выделенное (вместе с размерами) над листом внизу, как после тапа.
         const { w, h } = sizeRef.current;
         const st = useAppStore.getState();
         const r = st.project.rooms.find((x) => x.id === st.activeRoomId);
-        if (r && w && h && !boxVisible(roomBounds(r), viewRef.current, w, h, -32)) fitTo(r, true);
+        if (fitBeforeEdit.current && r && w && h && !boxVisible(roomBounds(r), viewRef.current, w, h, -32)) {
+          fitTo(r, true);
+        } else setRevealTick((t) => t + 1);
       }
     },
     [panBy, cancelReveal, fitTo],
   );
 
-  const { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onPointerLeave, isBusy, isPressed } =
-    useInteraction({
-      svgRef,
-      hostRef,
-      dataRef,
-      setView,
-      onUserView,
-      stopAnimation: interrupt,
-      onEditStart,
-      onGestureEnd,
-    });
+  const {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+    onPointerLeave,
+    onKeyDown,
+    onKeyUp,
+    isBusy,
+    isPressed,
+  } = useInteraction({
+    svgRef,
+    hostRef,
+    dataRef,
+    setView,
+    onUserView,
+    stopAnimation: interrupt,
+    onEditStart,
+    onGestureEnd,
+  });
 
   const onReveal = useCallback(
     (dx: number, dy: number) => {
@@ -323,8 +397,9 @@ export function PlanView(): JSX.Element {
     setView({ s: v.s, tx: v.tx + (size.w - prev.w) / 2, ty: v.ty + (size.h - prev.h) / 2 });
   }, [size, fitTo, setView]);
 
-  // Смена комнаты/шаблона — вписываем. Правка извне (панель, отмена), после
-  // которой комната перестала помещаться, — тоже. Свои перетаскивания — нет.
+  // Смена комнаты/шаблона — вписываем. Правка извне (панель, плашка, отмена),
+  // после которой комната перестала помещаться или заметно уменьшилась (а вид
+  // пользователь не трогал), — тоже. Свои перетаскивания — нет.
   const prevRoom = useRef<{ id: string; shape: string; bounds: BBox } | null>(null);
   useEffect(() => {
     const bounds = roomBounds(room);
@@ -343,8 +418,12 @@ export function PlanView(): JSX.Element {
     }
     // «Видна» — с запасом под плашки размеров у краёв.
     const v = viewRef.current;
-    if (boxVisible(prev.bounds, v, w, h, -32) && !boxVisible(bounds, v, w, h, -32)) fitTo(room, true);
-  }, [room, fitTo, isBusy]);
+    const lost = boxVisible(prev.bounds, v, w, h, -32) && !boxVisible(bounds, v, w, h, -32);
+    const sizeChanged =
+      Math.abs(bounds.width - prev.bounds.width) > 1e-6 || Math.abs(bounds.height - prev.bounds.height) > 1e-6;
+    const fit = !userMoved.current && sizeChanged ? fitTarget(room) : null;
+    if (lost || (fit && fit.s > v.s * 1.3)) fitTo(room, true);
+  }, [room, fitTo, fitTarget, isBusy]);
 
   useEffect(() => interrupt, [interrupt]);
 
@@ -368,7 +447,18 @@ export function PlanView(): JSX.Element {
     <div
       ref={hostRef}
       className={`pl-root${narrow ? " is-narrow" : ""}${coarse ? " is-coarse" : ""}`}
+      // Фокус после клика по плану: стрелки двигают выделенное только отсюда (и с ручек плана).
+      tabIndex={-1}
+      role="group"
+      aria-label="Редактор плана"
+      aria-describedby={`${uid}-help`}
+      onKeyDown={onKeyDown}
+      onKeyUp={onKeyUp}
     >
+      <p id={`${uid}-help`} className="visually-hidden">
+        Tab — плашки стен, углы и проёмы; Enter — выбрать и открыть действия; стрелки — сдвинуть на 1 см (с Shift — на
+        10 см); Delete — удалить угол или проём; Esc — снять выделение.
+      </p>
       <svg
         ref={svgRef}
         className="pl-svg"
@@ -408,6 +498,7 @@ export function PlanView(): JSX.Element {
               s={s}
               dimPerp={dimPerp}
               coarse={coarse}
+              labels={labels}
             />
           </g>
         ) : null}
@@ -416,7 +507,8 @@ export function PlanView(): JSX.Element {
       {ready ? (
         <div className="pl-html" style={{ transform: htmlTransform }}>
           <WallLabels room={room} walls={walls} layout={labels} s={s} along={narrow} />
-          <OpeningDimChips room={room} walls={walls} s={s} dimPerp={dimPerp} />
+          <KeyHandles room={room} walls={walls} s={s} />
+          <OpeningDimChips room={room} walls={walls} s={s} dimPerp={dimPerp} labels={labels} />
           <AngleChip room={room} s={s} />
           <SegmentTip lines={lines} s={s} />
         </div>
@@ -432,13 +524,7 @@ export function PlanView(): JSX.Element {
             </div>
           ) : null}
           {hintHidden ? null : (
-            <HintSlot
-              coarse={coarse}
-              docked={narrow}
-              mode={hintMode(size.w)}
-              roomId={room.id}
-              onClose={hideHint}
-            />
+            <HintSlot coarse={coarse} mode={hintMode(size.w)} onClose={hideHint} />
           )}
           <ContextPanel
             room={room}
@@ -447,9 +533,12 @@ export function PlanView(): JSX.Element {
             width={size.w}
             height={size.h}
             docked={narrow}
+            coarse={coarse}
             dimPerp={dimPerp}
             skirtH={product.height}
             labels={labels}
+            topInset={narrow ? 42 : 48}
+            revealTick={revealTick}
             onReveal={onReveal}
           />
         </>

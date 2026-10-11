@@ -37,6 +37,7 @@ import {
   Switch,
   TextField,
 } from "../ui/kit";
+import { scrollBehavior } from "./motion";
 import { ProfileIcon } from "./ProfileIcon";
 import "./panels.css";
 
@@ -145,7 +146,7 @@ const CatalogSection = memo(function CatalogSection({ selectedId }: { selectedId
     // Список схлопнулся: возвращаем выбранную карточку в поле зрения, а фокус
     // (кнопка выбора исчезла) — на кнопку списка, чтобы не терять место с клавиатуры.
     requestAnimationFrame(() => {
-      rootRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      rootRef.current?.scrollIntoView({ block: "nearest", behavior: scrollBehavior() });
       if (!document.activeElement || document.activeElement === document.body) {
         moreRef.current?.focus({ preventScroll: true });
       }
@@ -529,6 +530,11 @@ function AccessoryPricesForm({
     fields.push(
       { key: "innerCorner", label: "Угол внутренний" },
       { key: "outerCorner", label: "Угол наружный" },
+    );
+  }
+  // У ПВХ с кабель-каналом заглушки и соединители остаются и при запиле (см. domain/estimate).
+  if (fittings || p.cableChannel) {
+    fields.push(
       { key: "endCap", label: "Заглушка" },
       { key: "connector", label: "Соединитель" },
     );
@@ -552,7 +558,11 @@ function AccessoryPricesForm({
         ))}
       </div>
       {!fittings ? (
-        <p className="pn-note">При запиле под 45° уголки, заглушки и соединители не нужны.</p>
+        <p className="pn-note">
+          {p.cableChannel
+            ? "При запиле под 45° уголки не нужны; заглушки и соединители у плинтуса с кабель-каналом остаются."
+            : "При запиле под 45° уголки, заглушки и соединители не нужны."}
+        </p>
       ) : p.handedEndCaps ? (
         <p className="pn-note">Заглушки бывают левые и правые — цена у них одна, в списке покупок они посчитаны отдельно.</p>
       ) : null}

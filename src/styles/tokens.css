@@ -10,9 +10,12 @@
   --surface-3: #eeece7;
   --border: #e3e0d9;
   --border-strong: #cfcbc2;
+  /* Рамки полей ввода и трек переключателя: ≥ 3:1 к фону (WCAG 1.4.11). */
+  --border-input: #8f8b83;
   --text: #1b1b1f;
   --text-2: #53535b;
-  --text-3: #85858e;
+  /* ≥ 4,5:1 на surface, surface-2, surface-3 и bg. */
+  --text-3: #66666f;
 
   --primary: #2f5bd3;
   --primary-hover: #244bb5;
@@ -22,6 +25,9 @@
 
   --accent: #ee6a1b;
   --accent-weak: #fdeee3;
+  /* Оранжевый текст (≥ 4,5:1 на surface и accent-weak) и заливка под белый текст. */
+  --accent-text: #ae4a0a;
+  --accent-strong: #c2530f;
 
   --success: #198754;
   --success-weak: #e5f4ec;
@@ -81,9 +87,10 @@
     --surface-3: #2a2c32;
     --border: #2f3137;
     --border-strong: #3d4048;
+    --border-input: #6a6d76;
     --text: #ececef;
     --text-2: #a8a9b2;
-    --text-3: #757783;
+    --text-3: #9294a0;
     --primary: #6f93ff;
     --primary-hover: #87a5ff;
     --primary-weak: rgba(111, 147, 255, 0.14);
@@ -91,6 +98,8 @@
     --on-primary: #0d1430;
     --accent: #ff8a3d;
     --accent-weak: rgba(255, 138, 61, 0.14);
+    --accent-text: #ff8a3d;
+    --accent-strong: #c2530f;
     --success: #4cc38a;
     --success-weak: rgba(76, 195, 138, 0.14);
     --warning: #f0b955;
@@ -123,9 +132,10 @@
   --surface-3: #2a2c32;
   --border: #2f3137;
   --border-strong: #3d4048;
+  --border-input: #6a6d76;
   --text: #ececef;
   --text-2: #a8a9b2;
-  --text-3: #757783;
+  --text-3: #9294a0;
   --primary: #6f93ff;
   --primary-hover: #87a5ff;
   --primary-weak: rgba(111, 147, 255, 0.14);
@@ -133,6 +143,8 @@
   --on-primary: #0d1430;
   --accent: #ff8a3d;
   --accent-weak: rgba(255, 138, 61, 0.14);
+  --accent-text: #ff8a3d;
+  --accent-strong: #c2530f;
   --success: #4cc38a;
   --success-weak: rgba(76, 195, 138, 0.14);
   --warning: #f0b955;

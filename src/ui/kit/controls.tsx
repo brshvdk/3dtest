@@ -114,6 +114,45 @@ export function IconButton({
   );
 }
 
+/* ---------------------- Группы radio / tab (клавиатура) --------------- */
+
+/**
+ * Клавиатурная модель WAI-ARIA для групп radio и tab: в группе одна остановка
+ * Tab (tabIndex 0 только у выбранного), стрелки и Home/End переводят фокус и
+ * выбор на соседний элемент. Вешается на onKeyDown контейнера группы.
+ */
+export function rovingKeyDown(e: KeyboardEvent<HTMLElement>): void {
+  const step =
+    e.key === "ArrowRight" || e.key === "ArrowDown"
+      ? 1
+      : e.key === "ArrowLeft" || e.key === "ArrowUp"
+        ? -1
+        : e.key === "Home" || e.key === "End"
+          ? 0
+          : null;
+  if (step === null || e.altKey || e.ctrlKey || e.metaKey) return;
+  const items = Array.from(
+    e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"], [role="tab"]'),
+  ).filter((el) => !el.disabled);
+  const i = items.indexOf(document.activeElement as HTMLButtonElement);
+  if (i < 0 || !items.length) return;
+  const n = items.length;
+  const next =
+    e.key === "Home" ? items[0] : e.key === "End" ? items[n - 1] : items[(i + step + n) % n];
+  // Стрелки не должны доходить до глобальных обработчиков (сдвиг выделенного на плане).
+  e.preventDefault();
+  e.stopPropagation();
+  next.focus();
+  next.click();
+}
+
+/** Индекс элемента группы с tabIndex 0: выбранный, а если его нет — первый доступный. */
+export function rovingFocusIndex<T>(items: T[], isSelected: (it: T) => boolean, isDisabled?: (it: T) => boolean): number {
+  const ok = (it: T) => !isDisabled?.(it);
+  const selected = items.findIndex((it) => isSelected(it) && ok(it));
+  return selected >= 0 ? selected : items.findIndex(ok);
+}
+
 /* ------------------------------ Segmented ---------------------------- */
 
 export interface SegmentedOption<T extends string> {
@@ -139,18 +178,21 @@ export function Segmented<T extends string>({
   block?: boolean;
   ariaLabel?: string;
 }) {
+  const focusIndex = rovingFocusIndex(options, (o) => o.value === value, (o) => !!o.disabled);
   return (
     <div
       className={`k-seg k-seg--${size}${block ? " k-seg--block" : ""}`}
       role="radiogroup"
       aria-label={ariaLabel}
+      onKeyDown={rovingKeyDown}
     >
-      {options.map((o) => (
+      {options.map((o, i) => (
         <button
           key={o.value}
           type="button"
           role="radio"
           aria-checked={o.value === value}
+          tabIndex={i === focusIndex ? 0 : -1}
           className={o.value === value ? "is-active" : ""}
           onClick={() => onChange(o.value)}
           title={o.title}
@@ -330,6 +372,8 @@ function NumericInput({
   const dirtyRef = useRef(false);
   // Следующий blur не должен применять ввод (Esc — отмена, Enter — уже применён).
   const skipBlurRef = useRef(false);
+  // Фокус пришёл кликом: mouseup не должен снять выделение текста (см. onMouseUp).
+  const keepSelectionRef = useRef(false);
 
   // Внешнее значение меняется (перетаскивание на плане, стрелки) — обновляем
   // черновик, если пользователь сейчас не печатает.
@@ -388,15 +432,27 @@ function NumericInput({
         autoFocus={autoFocus}
         aria-label={ariaLabel}
         aria-invalid={error || undefined}
+        // Нет несохранённого ввода — Ctrl+Z отменяет правку проекта (useHotkeys).
+        data-pristine={!focused || !dirtyRef.current ? "" : undefined}
         onFocus={(e) => {
           setFocused(true);
           setDraft(text);
           dirtyRef.current = false;
           skipBlurRef.current = false;
-          const el = e.currentTarget;
-          requestAnimationFrame(() => el.select());
+          // Выделяем сразу, а не в следующем кадре: отложенный select() успевал
+          // «съесть» первую набранную цифру и возвращал фокус в уже покинутое поле.
+          e.currentTarget.select();
+        }}
+        onMouseDown={(e) => {
+          keepSelectionRef.current = document.activeElement !== e.currentTarget;
+        }}
+        onMouseUp={(e) => {
+          // Клик, давший фокус: mouseup поставил бы каретку и снял выделение.
+          if (keepSelectionRef.current) e.preventDefault();
+          keepSelectionRef.current = false;
         }}
         onBlur={() => {
+          keepSelectionRef.current = false;
           setFocused(false);
           if (skipBlurRef.current) skipBlurRef.current = false;
           else commit();
@@ -442,8 +498,12 @@ export function TextField({
   const [draft, setDraft] = useState(value);
   const [focused, setFocused] = useState(false);
   const cancelRef = useRef(false);
+  const prevValueRef = useRef(value);
+  // Значение сменилось снаружи (Ctrl+Z, другая вкладка): черновик без правок
+  // следует за ним и в фокусе — иначе blur вернул бы старый текст.
   useEffect(() => {
-    if (!focused) setDraft(value);
+    if (!focused || draft === prevValueRef.current) setDraft(value);
+    prevValueRef.current = value;
   }, [value, focused]);
   const commit = () => {
     if (cancelRef.current) {
@@ -465,6 +525,7 @@ export function TextField({
         maxLength={maxLength}
         aria-label={ariaLabel}
         list={list}
+        data-pristine={!focused || draft === value ? "" : undefined}
         onFocus={() => {
           setFocused(true);
           setDraft(value);
@@ -709,24 +770,29 @@ export function ColorSwatches({
   colors,
   onChange,
   allowCustom = true,
+  ariaLabel = "Цвет",
 }: {
   value: string;
   colors: { name: string; hex: string }[];
   onChange: (hex: string) => void;
   allowCustom?: boolean;
+  ariaLabel?: string;
 }) {
-  const isCustom = !colors.some((c) => c.hex.toLowerCase() === value.toLowerCase());
+  const isActive = (hex: string) => hex.toLowerCase() === value.toLowerCase();
+  const isCustom = !colors.some((c) => isActive(c.hex));
+  const focusIndex = rovingFocusIndex(colors, (c) => isActive(c.hex));
   return (
-    <div className="k-swatches" role="radiogroup">
-      {colors.map((c) => (
+    <div className="k-swatches" role="radiogroup" aria-label={ariaLabel} onKeyDown={rovingKeyDown}>
+      {colors.map((c, i) => (
         <button
           key={c.hex}
           type="button"
           role="radio"
-          aria-checked={c.hex.toLowerCase() === value.toLowerCase()}
+          aria-checked={isActive(c.hex)}
+          tabIndex={i === focusIndex ? 0 : -1}
           title={c.name}
           aria-label={c.name}
-          className={`k-swatch${c.hex.toLowerCase() === value.toLowerCase() ? " is-active" : ""}`}
+          className={`k-swatch${isActive(c.hex) ? " is-active" : ""}`}
           style={{ background: c.hex }}
           onClick={() => onChange(c.hex)}
         />

@@ -21,6 +21,39 @@ export const CUSTOM_PRODUCT_ID = "custom";
 export const CLIP_DOWEL_NAME = "Дюбель-гвоздь для клипс 6×40";
 export const CLIP_DOWEL_PRICE = 3;
 
+/** Плиточный клей продаётся мешками; prices.glue у керамики — цена 1 кг. */
+export const ADHESIVE_BAG_KG = 5;
+
+/**
+ * Расходники без своей цены в AccessoryPrices — типовые цены (как у дюбеля
+ * для клипс). Количество считает estimate.ts.
+ */
+export const GROUT = {
+  name: "Затирка для швов (упаковка 2 кг)",
+  price: 300,
+  /** кг на пог. м плинтуса: швы между элементами и стык с полом. */
+  kgPerMeter: 0.1,
+  packKg: 2,
+} as const;
+export const SANITARY_SEALANT = {
+  name: "Герметик силиконовый санитарный (туба 280 мл)",
+  price: 350,
+  /** пог. м шва на тубу. */
+  metersPerTube: 12,
+} as const;
+export const JOINT_GLUE = {
+  name: "Клей для стыков и запилов (туба 290 мл)",
+  price: 450,
+  /** Стыков и углов на тубу. */
+  jointsPerTube: 15,
+} as const;
+export const ACRYLIC_SEALANT = {
+  name: "Герметик акриловый под покраску (туба 310 мл)",
+  price: 250,
+  /** пог. м шва на тубу. */
+  metersPerTube: 15,
+} as const;
+
 export const MATERIAL_META: Record<
   SkirtingMaterial,
   { name: string; short: string; description: string }
@@ -423,7 +456,8 @@ const CATALOG: SkirtingProduct[] = [
     fastenerName: "Клей плиточный",
     glueRate: 0.4,
     price: 250,
-    prices: { ...NO_ACCESSORIES, glue: 30 },
+    // ₽ за кг; в списке покупок — мешками по ADHESIVE_BAG_KG.
+    prices: { ...NO_ACCESSORIES, glue: 60 },
     paintable: false,
     cableChannel: false,
   },
@@ -518,9 +552,26 @@ function scaleProfile(
 }
 
 /**
+ * Цена планки длины length по цене погонного метра каталожной планки,
+ * до рубля. Своя длина — своя цена: иначе длинная планка «дешевле», и
+ * смета зависит от длины в разы (керамика 0,3 / 0,6 / 1,2 м).
+ */
+export function priceForLength(base: SkirtingProduct, length: number): number {
+  if (!(length > 0) || Math.abs(length - base.length) < 1e-9) return base.price;
+  return Math.round((base.price / base.length) * length);
+}
+
+/** ₽ за погонный метр (для подписи «550 ₽/шт · 229 ₽/м»). */
+export function pricePerMeter(product: SkirtingProduct): number {
+  return product.length > 0 ? product.price / product.length : 0;
+}
+
+/**
  * Каталог + правки пользователя (prices мёржатся поштучно). Неизвестный id → DEFAULT.
  * Некорректные значения правок игнорируются; при смене высоты/глубины
  * профиль сечения масштабируется, чтобы оставаться согласованным с размерами.
+ * Цена планки без правки пересчитывается под выбранную длину (priceForLength);
+ * правка цены — цена именно этой планки, её не трогаем.
  */
 export function resolveProduct(
   productId: string,
@@ -537,6 +588,7 @@ export function resolveProduct(
   if (inRange(o.fastenerStep, LIMITS.fastenerStep)) next.fastenerStep = o.fastenerStep;
   if (inRange(o.glueRate, LIMITS.glueRate)) next.glueRate = o.glueRate;
   if (isNum(o.price) && o.price >= 0) next.price = o.price;
+  else next.price = priceForLength(base, next.length);
   if (typeof o.color === "string" && HEX_RE.test(o.color)) next.color = o.color.toLowerCase();
   if (typeof o.name === "string" && o.name.trim()) next.name = o.name.trim();
   if (o.cornerMethod && base.cornerMethods.includes(o.cornerMethod)) {

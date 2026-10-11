@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mergeCutPlans, optimizeCuts, splitIntoPieces } from "../cutting";
+import { FIT_TOLERANCE, mergeCutPlans, optimizeCuts, planCuts, splitIntoPieces } from "../cutting";
 import type { CutPlan, Piece } from "../cutting";
 import { computeRoomSkirting } from "../skirtingCalc";
 import type { RoomSkirtingResult } from "../skirtingCalc";
@@ -499,5 +499,86 @@ describe("optimizeCuts: состязательные случаи", () => {
     expect(plan.bars).toHaveLength(14);
     expect(plan.optimal).toBe(true);
     expectValidPlan(plan, ps, 0.6, 0.003);
+  });
+});
+
+describe("splitIntoPieces: допуск фурнитуры", () => {
+  const square = (a: number) => computeRoomSkirting(makeRoom([[0, 0], [a, 0], [a, a], [0, a]]), PVC);
+
+  it("стена до L + 10 мм — одна целая планка, без стыка", () => {
+    const { pieces: ps, joints } = splitIntoPieces(square(2.505), 2.5, 0.3, { fitTolerance: FIT_TOLERANCE });
+    expect(ps.map((p) => p.length)).toEqual([2.5, 2.5, 2.5, 2.5]);
+    expect(ps.every((p) => p.full)).toBe(true);
+    expect(joints).toBe(0);
+  });
+
+  it("за пределами допуска и без него — как раньше", () => {
+    expect(splitIntoPieces(square(2.52), 2.5, 0.3, { fitTolerance: FIT_TOLERANCE }).joints).toBe(4);
+    expect(splitIntoPieces(square(2.505), 2.5, 0.3).joints).toBe(4);
+    // 5,008 м: две целые планки.
+    const long = computeRoomSkirting(makeRoom([[0, 0], [5.008, 0], [5.008, 1], [0, 1]]), PVC);
+    const a = splitIntoPieces(long, 2.5, 0.3, { fitTolerance: FIT_TOLERANCE }).pieces.filter(
+      (p) => p.segmentIds[0] === "r:p0:1",
+    );
+    expect(a.map((p) => p.length)).toEqual([2.5, 2.5]);
+  });
+});
+
+describe("planCuts: стыки подбираются под обрезки", () => {
+  const rect = (w: number, h: number, id = "r") =>
+    computeRoomSkirting({ ...makeRoom([[0, 0], [w, 0], [w, h], [0, h]]), id }, PVC);
+
+  it("2,6×2,7: 5 планок вместо 8, куски ≥ мин. куска, стены собираются точно", () => {
+    const r = rect(2.6, 2.7);
+    const base = optimizeCuts(splitIntoPieces(r, 2.5, 0.3).pieces, 2.5, 0.003);
+    expect(base.bars).toHaveLength(8);
+    const plan = planCuts([r], 2.5, 0.003, 0.3);
+    expect(plan.cutPlan.bars).toHaveLength(5);
+    expect(plan.joints).toBe(4);
+    expect(plan.straightRuns).toEqual([2.6, 2.7, 2.6, 2.7]);
+    expect(plan.pieces).toHaveLength(8);
+    for (const p of plan.pieces) expect(p.length).toBeGreaterThanOrEqual(0.3);
+    for (const seg of r.segments) {
+      const parts = plan.pieces.filter((p) => p.segmentIds[0] === seg.id);
+      expect(parts.map((p) => p.label)).toEqual([`${seg.label} 1/2`, `${seg.label} 2/2`]);
+      expect(sum(parts.map((p) => p.length))).toBeCloseTo(seg.length, 9);
+    }
+    expectValidPlan(plan.cutPlan, plan.pieces, 2.5, 0.003);
+  });
+
+  it("без короткого хвоста — те же куски, что у splitIntoPieces", () => {
+    const r = computeRoomSkirting(makeRoom(RECT), PVC);
+    const plan = planCuts([r], 2.5, 0.003, 0.3);
+    expect(plan.pieces).toEqual(splitIntoPieces(r, 2.5, 0.3).pieces);
+    expect(plan.cutPlan.bars).toHaveLength(6);
+  });
+
+  it("никогда не хуже нарезки «пополам», детерминирован, куски не короче мин. куска", () => {
+    for (let seed = 1; seed <= 120; seed++) {
+      const rnd = lcg(seed * 31);
+      const L = [2.5, 2.4, 2.0, 3.0][seed % 4];
+      const minPiece = [0.3, 0.5, 0.2][seed % 3];
+      const results = Array.from({ length: 1 + (seed % 3) }, (_, k) =>
+        rect(+(0.8 + rnd() * 6).toFixed(2), +(0.8 + rnd() * 5).toFixed(2), `r${k}`),
+      );
+      const base = optimizeCuts(
+        results.flatMap((r) => splitIntoPieces(r, L, minPiece).pieces),
+        L,
+        0.003,
+      );
+      const plan = planCuts(results, L, 0.003, minPiece);
+      expect(plan.cutPlan.bars.length).toBeLessThanOrEqual(base.bars.length);
+      expect(planCuts(results, L, 0.003, minPiece)).toEqual(plan);
+      expectValidPlan(plan.cutPlan, plan.pieces, L, 0.003);
+      // Нарезка каждой стены: те же метки и сумма, ни один кусок хвоста не короче minPiece.
+      const split = results.flatMap((r) => splitIntoPieces(r, L, minPiece).pieces);
+      expect(plan.pieces.map((p) => p.label)).toEqual(split.map((p) => p.label));
+      for (const seg of results.flatMap((r) => r.segments)) {
+        const parts = plan.pieces.filter((p) => p.segmentIds[0] === seg.id);
+        expect(sum(parts.map((p) => p.length))).toBeCloseTo(seg.materialLength, 9);
+        const changed = parts.some((p) => Math.abs(p.length - split.find((x) => x.id === p.id)!.length) > 1e-9);
+        if (changed) for (const p of parts) expect(p.length).toBeGreaterThanOrEqual(minPiece - 1e-9);
+      }
+    }
   });
 });

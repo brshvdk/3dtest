@@ -53,6 +53,19 @@ export interface CutPlan {
 /** м, допуск на шум плавающей точки при сравнении длин. */
 const LEN_TOL = 1e-6;
 
+/**
+ * м: на столько прямой участок может быть длиннее целых планок, если его
+ * концы закрывает фурнитура. Планку всё равно режут на 3–5 мм короче стены
+ * (тепловой зазор), а торец на 10–15 мм заходит в уголок или заглушку —
+ * поэтому стену 2,505 м закрывает одна планка 2,5 м, без соединителя.
+ */
+export const FIT_TOLERANCE = 0.01;
+
+export interface SplitOptions {
+  /** м, допуск «участок длиннее планки» (только монтаж на фурнитуру, см. FIT_TOLERANCE). */
+  fitTolerance?: number;
+}
+
 interface StraightRun {
   segments: SkirtingSegment[];
   /** Σ materialLength — сколько материала нужно. */
@@ -85,39 +98,36 @@ function straightRuns(segments: SkirtingSegment[]): StraightRun[] {
   return runs;
 }
 
+/** Нарезка одного прямого участка. */
+interface RunCut {
+  run: StraightRun;
+  label: string;
+  /** Длины кусков по порядку вдоль участка. */
+  parts: number[];
+  /**
+   * Сумма двух последних кусков, если стык между ними можно сдвинуть
+   * (короткий хвост, по умолчанию поделён поровну); null — нарезка жёсткая.
+   */
+  flex: number | null;
+}
+
 /**
- * Режет сегменты на куски ≤ stockLength. Сегменты, соединённые стыком 'straight' (вершина на прямой),
- * сначала сливаются в один прямой участок. Участок длиной M ≤ L → 1 кусок. Иначе n = ceil(M/L):
- * (n−1) целых планок + остаток r; если r < minPiece — две последние делятся поровну ((L+r)/2).
- * joints = Σ(n−1) по участкам (стыки внутри прямых участков — под соединители).
- * Исключение — кольцо без единого угла и торца (все вершины «на прямой»): его куски
- * замыкаются друг на друга, поэтому стыков столько же, сколько кусков.
+ * Нарезка участков комнаты по правилам splitIntoPieces. Хвост длиннее
+ * 2·minPiece, поделённый поровну, помечается гибким — planCuts подбирает
+ * стык под обрезки других кусков.
  */
-export function splitIntoPieces(
+function cutRuns(
   result: RoomSkirtingResult,
-  stockLength: number,
+  L: number,
   minPiece: number,
-): { pieces: Piece[]; joints: number; straightRuns: number[] } {
-  if (!(stockLength > 0 && Number.isFinite(stockLength))) {
-    throw new Error("Длина планки должна быть конечным числом больше нуля");
-  }
-  const L = stockLength;
-  const pieces: Piece[] = [];
+  fitTolerance: number,
+): { cuts: RunCut[]; joints: number; straightRuns: number[] } {
+  const cuts: RunCut[] = [];
   const lengths: number[] = [];
   let joints = 0;
-
-  const add = (run: StraightRun, label: string, length: number) => {
-    pieces.push({
-      id: `${result.roomId}:pc${pieces.length + 1}`,
-      roomId: result.roomId,
-      segmentIds: run.segments.map((s) => s.id),
-      label,
-      length,
-      full: Math.abs(length - L) < LEN_TOL,
-    });
-  };
-
   const ring = result.segments.length > 0 && result.segments.every((s) => s.startJoint === "straight");
+  // Кольцо без углов и торцов фурнитурой не закрыть — допуск не применяем.
+  const tol = ring ? 0 : fitTolerance;
   for (const run of straightRuns(result.segments)) {
     const M = run.material;
     if (M <= LEN_TOL) continue;
@@ -125,28 +135,85 @@ export function splitIntoPieces(
     const label = run.segments.map((s) => s.label).join("+");
     // Тот же допуск, что и для «влезает в одну планку»: перебор на шум
     // плавающей точки не должен давать лишнюю планку и лишний стык.
-    const n = Math.max(1, Math.ceil((M - LEN_TOL) / L));
+    const n = Math.max(1, Math.ceil((M - tol - LEN_TOL) / L));
     if (ring) joints += 1;
+    joints += n - 1;
+    if (M > n * L) {
+      // Перебор в пределах допуска фурнитуры: n целых планок.
+      cuts.push({ run, label, parts: new Array<number>(n).fill(L), flex: null });
+      continue;
+    }
     if (n === 1) {
-      add(run, label, Math.min(M, L));
+      cuts.push({ run, label, parts: [M], flex: null });
       continue;
     }
     const r = Math.min(L, M - (n - 1) * L);
     const parts: number[] = [];
+    let flex: number | null = null;
     if (r < minPiece) {
-      // Короткий хвост некрасив и плохо держится — делим две последние поровну.
+      // Короткий хвост некрасив и плохо держится — две последние делим поровну
+      // (стык потом может сдвинуть planCuts, не делая кусков короче minPiece).
       for (let i = 0; i < n - 2; i++) parts.push(L);
-      const half = (L + r) / 2;
-      parts.push(half, half);
+      const tail = L + r;
+      parts.push(tail / 2, tail / 2);
+      if (tail >= 2 * minPiece + LEN_TOL && minPiece > 0) flex = tail;
     } else {
       for (let i = 0; i < n - 1; i++) parts.push(L);
       parts.push(r);
     }
-    parts.forEach((len, i) => add(run, `${label} ${i + 1}/${n}`, len));
-    joints += n - 1;
+    cuts.push({ run, label, parts, flex });
   }
-  return { pieces, joints, straightRuns: lengths };
+  return { cuts, joints, straightRuns: lengths };
 }
+
+/** Куски комнаты по нарезке: id `${roomId}:pcN`, подписи «A 1/2». */
+function piecesOf(roomId: string, cuts: RunCut[], L: number): Piece[] {
+  const pieces: Piece[] = [];
+  for (const c of cuts) {
+    const n = c.parts.length;
+    c.parts.forEach((length, i) => {
+      pieces.push({
+        id: `${roomId}:pc${pieces.length + 1}`,
+        roomId,
+        segmentIds: c.run.segments.map((s) => s.id),
+        label: n === 1 ? c.label : `${c.label} ${i + 1}/${n}`,
+        length,
+        full: Math.abs(length - L) < LEN_TOL,
+      });
+    });
+  }
+  return pieces;
+}
+
+/**
+ * Режет сегменты на куски ≤ stockLength. Сегменты, соединённые стыком 'straight' (вершина на прямой),
+ * сначала сливаются в один прямой участок. Участок длиной M ≤ L → 1 кусок. Иначе n = ceil(M/L):
+ * (n−1) целых планок + остаток r; если r < minPiece — две последние делятся поровну ((L+r)/2).
+ * joints = Σ(n−1) по участкам (стыки внутри прямых участков — под соединители).
+ * Исключение — кольцо без единого угла и торца (все вершины «на прямой»): его куски
+ * замыкаются друг на друга, поэтому стыков столько же, сколько кусков.
+ * opts.fitTolerance: участок до n·L + допуск закрывают n целых планок (монтаж на фурнитуру).
+ *
+ * Сама по себе нарезка не знает о раскрое — смета берёт куски из planCuts,
+ * где стык короткого хвоста подбирается под обрезки.
+ */
+export function splitIntoPieces(
+  result: RoomSkirtingResult,
+  stockLength: number,
+  minPiece: number,
+  opts: SplitOptions = {},
+): { pieces: Piece[]; joints: number; straightRuns: number[] } {
+  if (!(stockLength > 0 && Number.isFinite(stockLength))) {
+    throw new Error("Длина планки должна быть конечным числом больше нуля");
+  }
+  const { cuts, joints, straightRuns: lengths } = cutRuns(result, stockLength, minPiece, fitToleranceOf(opts));
+  return { pieces: piecesOf(result.roomId, cuts, stockLength), joints, straightRuns: lengths };
+}
+
+const fitToleranceOf = (opts: SplitOptions): number => {
+  const t = opts.fitTolerance;
+  return typeof t === "number" && Number.isFinite(t) && t > 0 ? t : 0;
+};
 
 /* ------------------------------ Раскрой ------------------------------ */
 
@@ -425,11 +492,23 @@ export function optimizeCuts(pieces: Piece[], stockLength: number, kerf: number)
     if (exact.proven) lowerBound = packing.length;
   }
 
-  const drafts = packing.map((bin) => {
+  return assemblePlan(
+    packing.map((bin) => bin.map((i) => items[i].idx)),
+    valid,
+    stockLength,
+    k,
+    lowerBound,
+  );
+}
+
+/**
+ * План раскроя из готовой раскладки: bins — индексы кусков во входном
+ * массиве valid по планкам. Планки сортируются, обрезки считаются.
+ */
+function assemblePlan(bins: number[][], valid: Piece[], stockLength: number, k: number, lowerBound: number): CutPlan {
+  const drafts = bins.map((bin) => {
     // Внутри планки — от длинного к короткому, при равенстве — по порядку входа.
-    const order = bin
-      .map((i) => items[i].idx)
-      .sort((a, b) => valid[b].length - valid[a].length || a - b);
+    const order = [...bin].sort((a, b) => valid[b].length - valid[a].length || a - b);
     const bp = order.map((i) => valid[i]);
     const sum = bp.reduce((acc, p) => acc + p.length, 0);
     const rest = stockLength - sum - (bp.length - 1) * k;
@@ -521,4 +600,191 @@ export function mergeCutPlans(plans: CutPlan[], stockLength: number, kerf: numbe
     lowerBound,
     optimal: plans.every((p) => p.optimal),
   };
+}
+
+/* ------------------------ Нарезка вместе с раскроем ------------------------ */
+
+/**
+ * Стык в хвосте участка двигаем с шагом 1 см, ед.: куски выходят «круглыми»
+ * (1,98 + 0,62, а не 1,994 + 0,606), а сантиметр запаса в обрезке не мешает.
+ */
+const FLEX_STEP_U = 10_000;
+
+export interface CutResult {
+  pieces: Piece[];
+  joints: number;
+  /** Длины прямых участков по стене (для крепежа), как в splitIntoPieces. */
+  straightRuns: number[];
+  cutPlan: CutPlan;
+}
+
+type RoomCuts = { roomId: string; cuts: RunCut[] };
+
+/**
+ * Нарезка комнат и раскрой вместе — так, как режет монтажник: стык на
+ * длинной стене ставят там, где в дело идёт обрезок. Сначала куски
+ * splitIntoPieces и их оптимальный раскрой. Затем короткий хвост участка
+ * (там splitIntoPieces делит два последних куска поровну) режется иначе:
+ * первый кусок закрывает обрезок другой планки, второй берётся из новой —
+ * 2,6 м = 2,0 + 0,6, а не 1,3 + 1,3. Куски хвоста не короче minPiece.
+ * Из двух вариантов берётся тот, где меньше планок; число кусков и стыков
+ * не меняется. Детерминирован.
+ */
+export function planCuts(
+  results: RoomSkirtingResult[],
+  stockLength: number,
+  kerf: number,
+  minPiece: number,
+  opts: SplitOptions = {},
+): CutResult {
+  if (!(stockLength > 0 && Number.isFinite(stockLength))) {
+    throw new Error("Длина планки должна быть конечным числом больше нуля");
+  }
+  const L = stockLength;
+  const k = Number.isFinite(kerf) && kerf > 0 ? kerf : 0;
+  const m = Number.isFinite(minPiece) && minPiece > 0 ? minPiece : 0;
+  const tol = fitToleranceOf(opts);
+  let joints = 0;
+  const straight: number[] = [];
+  const rooms: RoomCuts[] = results.map((r) => {
+    const c = cutRuns(r, L, m, tol);
+    joints += c.joints;
+    straight.push(...c.straightRuns);
+    return { roomId: r.roomId, cuts: c.cuts };
+  });
+  const basePieces = rooms.flatMap((r) => piecesOf(r.roomId, r.cuts, L));
+  const base = optimizeCuts(basePieces, L, k);
+  const done = (pieces: Piece[], cutPlan: CutPlan): CutResult => ({ pieces, joints, straightRuns: straight, cutPlan });
+
+  const hasFlex = rooms.some((r) => r.cuts.some((c) => c.flex !== null));
+  // Меньше, чем позволяет материал (с пропилами), не бывает при любых стыках.
+  if (!hasFlex || base.bars.length <= materialBound(basePieces, L, k)) return done(basePieces, base);
+  const alt = flexibleCuts(rooms, basePieces, L, k, m);
+  return alt.cutPlan.bars.length < base.bars.length ? done(alt.pieces, alt.cutPlan) : done(basePieces, base);
+}
+
+/** ceil(Σ(кусок + пропил) / (L + пропил)) — граница, не зависящая от того, где стыки. */
+function materialBound(pieces: Piece[], stockLength: number, kerf: number): number {
+  const kerfU = toUnits(kerf);
+  const total = pieces.reduce((acc, p) => acc + Math.min(toUnits(p.length), toUnits(stockLength)) + kerfU, 0);
+  return Math.ceil(total / (toUnits(stockLength) + kerfU));
+}
+
+interface Bin {
+  /** Индексы кусков в общем массиве. */
+  items: number[];
+  /** Загрузка с пропилами, ед. */
+  load: number;
+}
+
+/**
+ * Жёсткие куски раскладываются оптимально, затем гибкие хвосты (длинные
+ * первыми) заполняют обрезки: (1) оба куска — в обрезки двух планок
+ * (самая тесная пара), (2) первый — в самый большой обрезок, второй — в
+ * новую планку, (3) обе в новые: длинный и короткий (крупный обрезок
+ * пригодится следующему хвосту). Получившиеся куски ещё раз раскраиваются
+ * optimizeCuts; жадная раскладка — запасной вариант.
+ */
+function flexibleCuts(
+  rooms: RoomCuts[],
+  basePieces: Piece[],
+  L: number,
+  k: number,
+  minPiece: number,
+): { pieces: Piece[]; cutPlan: CutPlan } {
+  const stockU = toUnits(L);
+  const kerfU = toUnits(k);
+  const minU = Math.ceil(minPiece * UNITS - 1e-3);
+
+  // Гибкие хвосты: индекс первого из двух кусков и их сумма.
+  const pairs: Array<{ first: number; sum: number }> = [];
+  let pos = 0;
+  for (const r of rooms) {
+    for (const c of r.cuts) {
+      if (c.flex !== null) pairs.push({ first: pos + c.parts.length - 2, sum: c.flex });
+      pos += c.parts.length;
+    }
+  }
+  const flexIdx = new Set(pairs.flatMap((p) => [p.first, p.first + 1]));
+  const fixedIdx = basePieces.map((_, i) => i).filter((i) => !flexIdx.has(i));
+  const byId = new Map(fixedIdx.map((i) => [basePieces[i].id, i]));
+  const lengths = basePieces.map((p) => p.length);
+  const sizeU = (len: number) => Math.min(toUnits(len), stockU) + kerfU;
+
+  const bins: Bin[] = optimizeCuts(
+    fixedIdx.map((i) => basePieces[i]),
+    L,
+    k,
+  ).bars.map((b) => {
+    const items = b.pieces.map((p) => byId.get(p.id)!);
+    return { items, load: items.reduce((acc, i) => acc + sizeU(lengths[i]), 0) };
+  });
+  const free = (b: Bin) => stockU - b.load;
+  const put = (b: Bin | null, i: number, len: number) => {
+    lengths[i] = len;
+    if (b) {
+      b.items.push(i);
+      b.load += sizeU(len);
+    } else {
+      bins.push({ items: [i], load: sizeU(len) });
+    }
+  };
+
+  const order = [...pairs].sort((p, q) => q.sum - p.sum || p.first - q.first);
+  for (const { first, sum } of order) {
+    const sumU = toUnits(sum);
+    // Первый кусок a: не короче minPiece и не короче, чем нужно, чтобы второй влез в планку;
+    // не длиннее, чем оставит второму minPiece.
+    const lo = Math.max(minU, sumU - stockU);
+    /** Самый длинный допустимый a ≤ cap, с шагом FLEX_STEP_U (если шаг не помещается — ровно cap). */
+    const split = (cap: number) => {
+      const hi = Math.min(cap, sumU - minU);
+      if (hi < lo) return null;
+      let aU = Math.floor(hi / FLEX_STEP_U) * FLEX_STEP_U;
+      if (aU < lo) aU = hi;
+      const a = aU / UNITS;
+      const b = sum - a;
+      return { a, b, bU: toUnits(b) };
+    };
+    const open = bins.filter((b) => free(b) >= minU);
+
+    // (1) Оба куска — в обрезки: пара с наименьшим остатком.
+    let best: { bi: Bin; bj: Bin; a: number; b: number; slack: number } | null = null;
+    for (const bi of open) {
+      for (const bj of open) {
+        if (bi === bj || free(bi) < free(bj) || free(bi) + free(bj) < sumU) continue;
+        const s = split(free(bi));
+        if (!s || s.bU < minU || s.bU > free(bj)) continue;
+        const slack = free(bi) + free(bj) - sumU;
+        if (!best || slack < best.slack) best = { bi, bj, a: s.a, b: s.b, slack };
+      }
+    }
+    if (best) {
+      put(best.bi, first, best.a);
+      put(best.bj, first + 1, best.b);
+      continue;
+    }
+    // (2) Первый — в самый большой обрезок, второй — из новой планки.
+    let roomiest: Bin | null = null;
+    for (const b of open) if (!roomiest || free(b) > free(roomiest)) roomiest = b;
+    const inOffcut = roomiest ? split(free(roomiest)) : null;
+    if (roomiest && inOffcut) {
+      put(roomiest, first, inOffcut.a);
+      put(null, first + 1, inOffcut.b);
+      continue;
+    }
+    // (3) Обе новые: длинный кусок и короткий (split(L) есть всегда: minPiece ≤ хвост/2 ≤ L).
+    const s = split(stockU) ?? { a: sum / 2, b: sum / 2 };
+    put(null, first, s.a);
+    put(null, first + 1, s.b);
+  }
+
+  const pieces = basePieces.map((p, i) =>
+    lengths[i] === p.length ? p : { ...p, length: lengths[i], full: Math.abs(lengths[i] - L) < LEN_TOL },
+  );
+  const reopt = optimizeCuts(pieces, L, k);
+  if (reopt.bars.length <= bins.length) return { pieces, cutPlan: reopt };
+  const sizes = pieces.map((p) => sizeU(p.length)).sort((a, b) => b - a);
+  const lb = Math.min(lowerBoundL2(sizes, stockU + kerfU), bins.length);
+  return { pieces, cutPlan: assemblePlan(bins.map((b) => b.items), pieces, L, k, lb) };
 }

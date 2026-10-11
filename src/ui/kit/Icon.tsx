@@ -56,7 +56,10 @@ export type IconName =
   | "list"
   | "home"
   | "drag"
-  | "corner";
+  | "corner"
+  | "add-corner"
+  | "more"
+  | "history";
 
 const PATHS: Record<IconName, JSX.Element> = {
   "walls-auto": (
@@ -276,6 +279,27 @@ const PATHS: Record<IconName, JSX.Element> = {
     <>
       <path d="M5 4v15h15" />
       <path d="M9 4v11h11" />
+    </>
+  ),
+  "add-corner": (
+    <>
+      <path d="M3 20 10.3 12.7M13.7 12.7 21 20" />
+      <circle cx="12" cy="11" r="2.4" />
+      <path d="M18 3v6M15 6h6" />
+    </>
+  ),
+  more: (
+    <>
+      <circle cx="5" cy="12" r="1.3" fill="currentColor" />
+      <circle cx="12" cy="12" r="1.3" fill="currentColor" />
+      <circle cx="19" cy="12" r="1.3" fill="currentColor" />
+    </>
+  ),
+  history: (
+    <>
+      <path d="M3.5 12a8.5 8.5 0 1 0 2.5-6" />
+      <path d="M3 4v4h4" />
+      <path d="M12 7.5V12l3 2" />
     </>
   ),
 };

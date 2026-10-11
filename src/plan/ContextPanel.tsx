@@ -2,19 +2,25 @@
  * Контекстная панель выделенного объекта: стена (длина, добавить проём,
  * новый угол), проём (петли, открывание, дублировать, удалить, настроить),
  * вершина (удалить угол). На широком плане — карточка рядом с объектом,
- * не перекрывающая его; на узком — внизу экрана.
+ * не перекрывающая его и как можно меньше закрывающая комнату; на узком —
+ * компактный лист внизу экрана.
+ *
+ * Панель открывает только выбор на самом плане (клик, тап, клавиатура по
+ * ручке). Выделение из боковой панели или 3D лишь подсвечивает объект, а
+ * проём на шаге «Проёмы» и так открыт в инспекторе слева. Смена шага
+ * закрывает панель.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import { centroid, cornerAt, getWall } from "../domain/geometry";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
+import { centroid, cornerAt, getWall, pointInPolygon } from "../domain/geometry";
 import { MAX_ROOM_EXTENT, MIN_WALL, removePoint } from "../domain/roomEdit";
 import { describeOpening, OPENING_KIND_META, skirtingBlock, wrapsReveals } from "../domain/openings";
 import type { Opening, OpeningKind, Room, Vec2, Wall } from "../domain/types";
-import { formatLength, formatNumber } from "../domain/units";
+import { formatLength } from "../domain/units";
 import { useAppStore } from "../state/store";
 import { Button, Icon, IconButton, LengthField, Segmented, toast, type IconName } from "../ui/kit";
 import { onWall, openingExtent } from "./geom";
-import { openingDimItems, type WallLabelLayout } from "./Labels";
-import { usePlanUi } from "./planUi";
+import { dimChipPos, formatAngle, openingDimItems, openingDimPerp, type WallLabelLayout } from "./Labels";
+import { claimSelection, keepFocusInPlan, selectionKey, usePlanUi } from "./planUi";
 import { toScreen, type View } from "./viewport";
 
 export const KIND_ICON: Record<OpeningKind, IconName> = {
@@ -41,9 +47,6 @@ const ADD_KINDS: Array<{ kind: OpeningKind; label: string }> = [
   { kind: "furniture", label: "Мебель" },
 ];
 
-/** «90°», «135,5°» */
-const formatAngle = (deg: number): string => `${formatNumber(Math.round(deg * 10) / 10, 1, { trim: true })}°`;
-
 const activeRoom = (): Room => {
   const s = useAppStore.getState();
   return s.project.rooms.find((r) => r.id === s.activeRoomId) ?? s.project.rooms[0];
@@ -51,7 +54,14 @@ const activeRoom = (): Room => {
 
 /* ------------------------------ Содержимое ------------------------------ */
 
-function WallContent({ wall, room, compact }: { wall: Wall; room: Room; compact: boolean }) {
+/**
+ * full — карточка на большом плане; sheet — лист внизу на телефоне (две
+ * строки, кнопки с подписями под палец); bar — одна строка рядом со стеной
+ * на небольшом плане (иконки с подсказками), чтобы не закрывать комнату.
+ */
+type WallVariant = "full" | "sheet" | "bar";
+
+function WallContent({ wall, room, variant }: { wall: Wall; room: Room; variant: WallVariant }) {
   const count = room.openings.filter((o) => o.wallId === wall.id).length;
   const setLength = (v: number) => {
     // Поле применяет значение и по Enter, и по потере фокуса — сравниваем
@@ -64,31 +74,64 @@ function WallContent({ wall, room, compact }: { wall: Wall; room: Room; compact:
   };
   const add = (kind: OpeningKind) => {
     const id = useAppStore.getState().addOpening(kind, { wallId: wall.id });
-    if (!id) toast(`На стене ${wall.label} не хватает места для ${KIND_GENITIVE[kind]}`, "warning");
+    // Новый проём выделен — его панель открывается на месте этой.
+    if (id) claimSelection();
+    else toast(`На стене ${wall.label} не хватает места для ${KIND_GENITIVE[kind]}`, "warning");
   };
   const split = () => {
     const before = activeRoom();
     useAppStore.getState().splitWall(wall.id, Math.round((wall.length / 2) * 1000) / 1000);
     if (activeRoom() === before) toast("Стена слишком короткая, чтобы добавить угол", "warning");
+    else claimSelection();
   };
   const close = <IconButton icon="close" label="Закрыть" size="sm" onClick={() => useAppStore.getState().select(null)} />;
   const lengthField = (
     <LengthField
       id={`pl-len-${wall.id}`}
       className="pl-ctx__len"
-      ariaLabel={compact ? `Длина стены ${wall.label}` : undefined}
+      ariaLabel={variant === "full" ? undefined : `Длина стены ${wall.label}`}
       value={wall.length}
       min={MIN_WALL}
       max={MAX_ROOM_EXTENT}
       onChange={setLength}
     />
   );
+  if (variant === "bar") {
+    return (
+      <div className="pl-ctx__head">
+        <span className="pl-ctx__badge" title={`Стена ${wall.label}`}>
+          {wall.label}
+        </span>
+        {lengthField}
+        <span className="pl-ctx__vsep" />
+        {ADD_KINDS.map((k) => (
+          <IconButton
+            key={k.kind}
+            className="pl-ctx__add"
+            icon={KIND_ICON[k.kind]}
+            label={`${k.label} на стену ${wall.label}`}
+            size="sm"
+            onClick={() => add(k.kind)}
+          />
+        ))}
+        <IconButton
+          className="pl-ctx__add"
+          icon="add-corner"
+          label="Угол посередине стены"
+          size="sm"
+          onClick={split}
+        />
+        <span className="pl-ctx__vsep" />
+        {close}
+      </div>
+    );
+  }
   const adds = ADD_KINDS.map((k) => (
     <Button key={k.kind} size="sm" icon={KIND_ICON[k.kind]} onClick={() => add(k.kind)} title={OPENING_KIND_META[k.kind].hint}>
       {k.label}
     </Button>
   ));
-  if (compact) {
+  if (variant === "sheet") {
     // Телефон: панель внизу и так закрывает часть плана — всё в две строки.
     return (
       <>
@@ -136,128 +179,177 @@ function WallContent({ wall, room, compact }: { wall: Wall; room: Room; compact:
   );
 }
 
-/** Как проём влияет на плинтус — коротко, для подзаголовка. */
-function skirtingEffect(o: Opening, wall: Wall, skirtH: number): { text: string; none: boolean } {
+/** Как проём влияет на плинтус — коротко, для подзаголовка (short — для компактной панели). */
+function skirtingEffect(o: Opening, wall: Wall, skirtH: number, short: boolean): { text: string; none: boolean } {
   const block = skirtingBlock(o, skirtH);
   if (!block) {
+    if (short) return { text: "Не влияет на плинтус", none: true };
     return { text: o.kind === "window" ? "Окно выше плинтуса — не влияет" : "Не влияет на плинтус", none: true };
   }
   const len = Math.max(0, Math.min(wall.length, block.to) - Math.max(0, block.from));
+  const reveals = wrapsReveals(o) ? formatLength(2 * wall.thickness, "cm") : "";
+  if (short) return { text: `Плинтус −${formatLength(len, "cm")}${reveals ? ` · +${reveals} откосы` : ""}`, none: false };
   let text = `Плинтус прерывается на ${formatLength(len, "cm")}`;
-  if (wrapsReveals(o)) text += ` · +${formatLength(2 * wall.thickness, "cm")} в откосы`;
+  if (reveals) text += ` · +${reveals} в откосы`;
   return { text, none: false };
 }
 
 function OpeningContent({ o, wall, skirtH, compact }: { o: Opening; wall: Wall; skirtH: number; compact: boolean }) {
   const st = useAppStore.getState;
   const update = (patch: Partial<Opening>) => st().updateOpening(o.id, patch);
-  const effect = skirtingEffect(o, wall, skirtH);
+  const effect = skirtingEffect(o, wall, skirtH, compact);
   const sides = o.kind === "door" || o.kind === "balcony";
-  return (
-    <>
-      <div className="pl-ctx__head">
-        <span className={`pl-ctx__icon pl-ctx__icon--${o.kind}`}>
-          <Icon name={KIND_ICON[o.kind]} size={17} />
-        </span>
-        <div className="pl-ctx__titles">
-          <div className="pl-ctx__title">
-            {describeOpening(o)} <span className="pl-ctx__wall">· стена {wall.label}</span>
-          </div>
-          <div className={`pl-ctx__sub pl-ctx__sub--skirt${effect.none ? " pl-ctx__sub--none" : ""}`}>{effect.text}</div>
-        </div>
-        <IconButton icon="close" label="Закрыть" size="sm" onClick={() => st().select(null)} />
-      </div>
-      {o.kind === "door" ? (
-        <div className="pl-ctx__opts">
-          {o.leaves === 1 ? (
-            <div className="pl-ctx__opt">
-              <span className="pl-ctx__label" title="Если смотреть изнутри комнаты, лицом к двери">
-                Петли
-              </span>
-              <Segmented
-                size="sm"
-                value={o.hinge}
-                ariaLabel="Сторона петель"
-                onChange={(hinge) => update({ hinge })}
-                options={[
-                  { value: "left", label: "Слева" },
-                  { value: "right", label: "Справа" },
-                ]}
-              />
-            </div>
-          ) : null}
+  const duplicate = () => {
+    st().duplicateOpening(o.id);
+    claimSelection();
+  };
+  const settings = (
+    <Button size="sm" icon="settings" onClick={() => st().setPanelTab("openings")} title="Размеры и все параметры — в панели «Проёмы»">
+      Настроить
+    </Button>
+  );
+  const remove = (
+    <IconButton
+      className="pl-ctx__end"
+      icon="trash"
+      label="Удалить"
+      size="sm"
+      variant="danger"
+      onClick={() => st().removeOpening(o.id)}
+    />
+  );
+  const close = <IconButton icon="close" label="Закрыть" size="sm" onClick={() => st().select(null)} />;
+  const opts =
+    o.kind === "door" ? (
+      <div className="pl-ctx__opts">
+        {o.leaves === 1 ? (
           <div className="pl-ctx__opt">
-            {compact ? null : <span className="pl-ctx__label">Открывается</span>}
-            <Segmented
-              size="sm"
-              value={o.swing}
-              ariaLabel="Куда открывается дверь"
-              onChange={(swing) => update({ swing })}
-              options={[
-                { value: "in", label: "Внутрь" },
-                { value: "out", label: "Наружу" },
-              ]}
-            />
-          </div>
-        </div>
-      ) : null}
-      {o.kind === "balcony" ? (
-        <div className="pl-ctx__opts">
-          <div className="pl-ctx__opt">
-            <span className="pl-ctx__label" title="Если смотреть изнутри комнаты">
-              Дверь
+            <span className="pl-ctx__label" title="Если смотреть изнутри комнаты, лицом к двери">
+              Петли
             </span>
             <Segmented
               size="sm"
-              value={o.balconyDoorSide}
-              ariaLabel="Сторона балконной двери"
-              onChange={(balconyDoorSide) => update({ balconyDoorSide })}
+              value={o.hinge}
+              ariaLabel="Сторона петель"
+              onChange={(hinge) => update({ hinge })}
               options={[
                 { value: "left", label: "Слева" },
                 { value: "right", label: "Справа" },
               ]}
             />
           </div>
+        ) : null}
+        <div className="pl-ctx__opt">
+          {compact ? null : <span className="pl-ctx__label">Открывается</span>}
+          <Segmented
+            size="sm"
+            value={o.swing}
+            ariaLabel="Куда открывается дверь"
+            onChange={(swing) => update({ swing })}
+            options={[
+              { value: "in", label: "Внутрь" },
+              { value: "out", label: "Наружу" },
+            ]}
+          />
         </div>
-      ) : null}
-      {sides && !compact ? <p className="pl-ctx__hint">Слева/справа — если смотреть из комнаты на стену.</p> : null}
+      </div>
+    ) : o.kind === "balcony" ? (
+      <div className="pl-ctx__opts">
+        <div className="pl-ctx__opt">
+          <span className="pl-ctx__label" title="Если смотреть изнутри комнаты">
+            Дверь
+          </span>
+          <Segmented
+            size="sm"
+            value={o.balconyDoorSide}
+            ariaLabel="Сторона балконной двери"
+            onChange={(balconyDoorSide) => update({ balconyDoorSide })}
+            options={[
+              { value: "left", label: "Слева" },
+              { value: "right", label: "Справа" },
+            ]}
+          />
+        </div>
+      </div>
+    ) : null;
+  const titles = (
+    <div className="pl-ctx__titles">
+      <div className="pl-ctx__title">
+        {describeOpening(o)} <span className="pl-ctx__wall">· стена {wall.label}</span>
+      </div>
+      <div className={`pl-ctx__sub pl-ctx__sub--skirt${effect.none ? " pl-ctx__sub--none" : ""}`}>
+        <span>{effect.text}</span>
+      </div>
+    </div>
+  );
+  const icon = (
+    <span className={`pl-ctx__icon pl-ctx__icon--${o.kind}`}>
+      <Icon name={KIND_ICON[o.kind]} size={17} />
+    </span>
+  );
+  if (compact) {
+    // Одна строка с действиями-иконками (+ строка переключателей у двери и балкона):
+    // лист не закрывает полплана. «Дублировать» и остальное — в «Настроить».
+    return (
+      <>
+        <div className="pl-ctx__head">
+          {icon}
+          {titles}
+          <IconButton
+            icon="settings"
+            label="Настроить: размеры и все параметры"
+            size="sm"
+            onClick={() => st().setPanelTab("openings")}
+          />
+          {remove}
+          {close}
+        </div>
+        {opts}
+      </>
+    );
+  }
+  return (
+    <>
+      <div className="pl-ctx__head">
+        {icon}
+        {titles}
+        {close}
+      </div>
+      {opts}
+      {sides ? <p className="pl-ctx__hint">Слева/справа — если смотреть из комнаты на стену.</p> : null}
       <div className="pl-ctx__actions">
-        <Button size="sm" icon="settings" onClick={() => st().setPanelTab("openings")} title="Размеры и все параметры — в панели «Проёмы»">
-          Настроить
-        </Button>
-        <Button size="sm" icon="copy" onClick={() => st().duplicateOpening(o.id)} title="Копия рядом на той же стене">
+        {settings}
+        <Button size="sm" icon="copy" onClick={duplicate} title="Копия рядом на той же стене">
           Дублировать
         </Button>
-        <IconButton
-          className="pl-ctx__end"
-          icon="trash"
-          label="Удалить"
-          size="sm"
-          variant="danger"
-          onClick={() => st().removeOpening(o.id)}
-        />
+        {remove}
       </div>
     </>
   );
 }
 
-function PointContent({ room, pointId, compact }: { room: Room; pointId: string; compact: boolean }) {
+function PointContent({ room, pointId, variant }: { room: Room; pointId: string; variant: WallVariant }) {
   const idx = room.points.findIndex((p) => p.id === pointId);
   if (idx < 0) return null;
   const corner = cornerAt(room, idx);
   const canRemove = removePoint(room, pointId) !== room;
-  const del = (
-    <Button
-      size="sm"
-      variant="danger"
-      icon="trash"
-      disabled={!canRemove}
-      onClick={() => useAppStore.getState().removePoint(pointId)}
-      title={canRemove ? "Соседние стены сольются в одну" : "Нельзя: у комнаты должно остаться 3 стены без пересечений"}
-    >
-      Удалить угол
-    </Button>
-  );
+  const remove = () => useAppStore.getState().removePoint(pointId);
+  const why = canRemove ? "Соседние стены сольются в одну" : "Нельзя: у комнаты должно остаться 3 стены без пересечений";
+  const del =
+    variant === "bar" ? (
+      <IconButton
+        icon="trash"
+        label={canRemove ? "Удалить угол — соседние стены сольются в одну" : "Удалить угол нельзя"}
+        size="sm"
+        variant="danger"
+        disabled={!canRemove}
+        onClick={remove}
+      />
+    ) : (
+      <Button size="sm" variant="danger" icon="trash" disabled={!canRemove} onClick={remove} title={why}>
+        Удалить угол
+      </Button>
+    );
   const note = !canRemove ? <span className="pl-ctx__note">Без этого угла комната станет некорректной</span> : null;
   return (
     <>
@@ -269,12 +361,12 @@ function PointContent({ room, pointId, compact }: { room: Room; pointId: string;
           <div className="pl-ctx__title">
             {corner.kind === "straight" ? "Точка на стене" : `Угол ${formatAngle(corner.angle)}`}
           </div>
-          <div className="pl-ctx__sub">Тяните, чтобы изменить форму</div>
+          <div className="pl-ctx__sub pl-ctx__sub--wrap">Тяните — меняется форма</div>
         </div>
-        {compact ? del : null}
+        {variant !== "full" ? del : null}
         <IconButton icon="close" label="Закрыть" size="sm" onClick={() => useAppStore.getState().select(null)} />
       </div>
-      {compact ? (
+      {variant !== "full" ? (
         note
       ) : (
         <div className="pl-ctx__actions">
@@ -342,14 +434,17 @@ export function selectionBox(
     const w = o && walls.find((x) => x.id === o.wallId);
     if (!o || !w) return null;
     const e = openingExtent(o, w);
-    const p1 = Math.max(e.p1, dimPerp + 16 / s, o.kind === "furniture" ? o.depth + 26 / s : 0);
-    // Вместе с плашками размеров, вынесенными за угол (короткий участок у угла).
+    let p1 = Math.max(e.p1, dimPerp + 16 / s, o.kind === "furniture" ? o.depth + 26 / s : 0);
+    // Вместе с плашками размеров, вынесенными за угол (короткий участок у угла) или отведёнными вглубь.
     let a0 = e.a0;
     let a1 = e.a1;
+    const perp = openingDimPerp(o, s, dimPerp);
     for (const it of openingDimItems(o, w, s)) {
-      if (!it.tight) continue;
-      a0 = Math.min(a0, it.chipAlong - it.chipPx / 2 / s);
-      a1 = Math.max(a1, it.chipAlong + it.chipPx / 2 / s);
+      const at = dimChipPos(w, it, perp, s, labels);
+      if (!it.tight && at.perp === perp) continue;
+      a0 = Math.min(a0, at.along - it.chipPx / 2 / s);
+      a1 = Math.max(a1, at.along + it.chipPx / 2 / s);
+      p1 = Math.max(p1, at.perp + 16 / s);
     }
     const pts = [onWall(w, a0, e.p0), onWall(w, a1, e.p0), onWall(w, a0, p1), onWall(w, a1, p1)];
     return {
@@ -369,12 +464,26 @@ export function selectionBox(
 
 type Side = "below" | "above" | "right" | "left";
 
+/** Доля прямоугольника (x, y, w, h), лежащая на полу комнаты (poly — экранные px), в px². */
+function floorOverlap(poly: readonly Vec2[], x: number, y: number, w: number, h: number): number {
+  const N = 6;
+  const M = 4;
+  let n = 0;
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < M; j++) {
+      if (pointInPolygon({ x: x + ((i + 0.5) * w) / N, y: y + ((j + 0.5) * h) / M }, poly)) n++;
+    }
+  }
+  return (n / (N * M)) * w * h;
+}
+
 /**
- * Место для панели рядом с выделением (box), со стороны комнаты (dir).
- * Панель не должна закрывать ручки углов и плашки стен (avoid, экранные px):
- * иначе за соседний угол не ухватиться, а размер не прочитать. Перебираем
- * стороны и выравнивания, берём первое положение без помех, иначе — с
- * наименьшим их числом.
+ * Место для панели рядом с выделением (box). Панель не должна закрывать
+ * ручки углов и плашки стен (avoid, экранные px): иначе за соседний угол не
+ * ухватиться, а размер не прочитать. И как можно меньше закрывать пол
+ * комнаты (floor — её контур на экране): сначала пробуем снаружи стены
+ * (против dir — направления в комнату), потом сбоку, потом внутри. Из
+ * положений без помех берём то, что меньше всего закрывает комнату.
  */
 function place(
   box: Box,
@@ -384,11 +493,12 @@ function place(
   W: number,
   H: number,
   avoid: readonly Box[],
+  floor: readonly Vec2[],
 ): { x: number; y: number } | null {
   const gap = 10;
   const m = 8;
-  const vertical: Side[] = dir.y >= 0 ? ["below", "above"] : ["above", "below"];
-  const horizontal: Side[] = dir.x >= 0 ? ["right", "left"] : ["left", "right"];
+  const vertical: Side[] = dir.y >= 0 ? ["above", "below"] : ["below", "above"];
+  const horizontal: Side[] = dir.x >= 0 ? ["left", "right"] : ["right", "left"];
   const order = Math.abs(dir.y) >= Math.abs(dir.x) ? [...vertical, ...horizontal] : [...horizontal, ...vertical];
   const cx = (box.x0 + box.x1) / 2;
   const cy = (box.y0 + box.y1) / 2;
@@ -408,30 +518,48 @@ function place(
     }
     return n;
   };
-  let best: { x: number; y: number; n: number } | null = null;
-  for (const side of order) {
+  let best: { x: number; y: number; score: number } | null = null;
+  for (let rank = 0; rank < order.length; rank++) {
+    const side = order[rank];
     const candidates: Array<{ x: number; y: number }> = [];
     if (side === "below" || side === "above") {
       const y = side === "below" ? box.y1 + gap : box.y0 - gap - ph;
       if (side === "below" ? y + ph > H - m : y < m) continue;
-      for (const x of [cx - pw / 2, box.x0, box.x1 - pw, box.x1 + gap - pw / 2, box.x0 - gap - pw / 2]) {
-        candidates.push({ x: clampX(x), y });
-      }
+      const xs = [cx - pw / 2, box.x0, box.x1 - pw, box.x1 + gap - pw / 2, box.x0 - gap - pw / 2];
+      // Вплотную к помехам в этой полосе — слева и справа от них.
+      for (const a of others) if (a.y1 > y && a.y0 < y + ph) xs.push(a.x0 - 6 - pw, a.x1 + 6);
+      for (const x of xs) candidates.push({ x: clampX(x), y });
     } else {
       const x = side === "right" ? box.x1 + gap : box.x0 - gap - pw;
       if (side === "right" ? x + pw > W - m : x < m) continue;
-      for (const y of [cy - ph / 2, box.y0, box.y1 - ph]) candidates.push({ x, y: clampY(y) });
+      const ys = [cy - ph / 2, box.y0, box.y1 - ph];
+      for (const a of others) if (a.x1 > x && a.x0 < x + pw) ys.push(a.y0 - 6 - ph, a.y1 + 6);
+      for (const y of ys) candidates.push({ x, y: clampY(y) });
     }
     for (const c of candidates) {
-      const n = hits(c.x, c.y);
-      if (n === 0) return c;
-      if (!best || n < best.n) best = { ...c, n };
+      // Помеха — почти запрет; закрытый пол — px²; порядок сторон — при равенстве.
+      const score = hits(c.x, c.y) * 1e7 + floorOverlap(floor, c.x, c.y, pw, ph) + rank;
+      if (!best || score < best.score) best = { ...c, score };
     }
   }
   return best;
 }
 
 /* ------------------------------ Панель ------------------------------ */
+
+/** План ниже — панель рядом с объектом в компактном виде (как лист на телефоне). */
+const COMPACT_H = 600;
+
+/**
+ * Панель открыта: выделение сделано на плане (та же ссылка, что запомнил
+ * план) и проём не открыт в инспекторе на шаге «Проёмы».
+ */
+export function useContextShown(roomId: string): boolean {
+  const sel = useAppStore((st) => st.selection);
+  const tab = useAppStore((st) => st.panelTab);
+  const owner = usePlanUi((u) => u.ctxFor);
+  return !!sel && sel.roomId === roomId && sel === owner && !(sel.type === "opening" && tab === "openings");
+}
 
 export interface ContextPanelProps {
   room: Room;
@@ -441,11 +569,17 @@ export interface ContextPanelProps {
   height: number;
   /** Всегда внизу (узкий план / телефон). */
   docked: boolean;
+  /** Палец: внизу — лист с крупными подписанными кнопками; мышь — строка иконок. */
+  coarse: boolean;
   dimPerp: number;
   /** Высота плинтуса, м — чтобы сказать, влияет ли проём. */
   skirtH: number;
   /** Раскладка плашек стен (габарит выделенной стены вместе с плашкой). */
   labels: WallLabelLayout;
+  /** px сверху, занятые сводкой комнаты: показывая выделение, не ставим его под неё. */
+  topInset: number;
+  /** Меняется — показать выделение заново (после перетаскивания объекта). */
+  revealTick: number;
   /**
    * Выделение не видно (за краем экрана или под панелью внизу) — просим
    * сдвинуть вид на (dx, dy) px. Вызывается один раз на выделение.
@@ -460,16 +594,31 @@ export function ContextPanel({
   width,
   height,
   docked,
+  coarse,
   dimPerp,
   skirtH,
   labels,
+  topInset,
+  revealTick,
   onReveal,
 }: ContextPanelProps) {
   const sel = useAppStore((st) => (st.selection && st.selection.roomId === room.id ? st.selection : null));
+  const shown = useContextShown(room.id);
+  const tab = useAppStore((st) => st.panelTab);
   const dragging = usePlanUi((u) => !!u.drag && u.drag.kind !== "pan");
   // Длину стены вводят прямо в плашке — второе поле той же длины в панели только мешает.
   const chipEditing = usePlanUi((u) => !!u.editing && u.editing.startsWith("wall:"));
   const [size, setSize] = useState<{ w: number; h: number } | null>(null);
+  const compact = docked || height < COMPACT_H;
+  const variant: WallVariant = docked && coarse ? "sheet" : compact ? "bar" : "full";
+
+  // Смена шага закрывает панель (выделение остаётся подсвеченным).
+  const lastTab = useRef(tab);
+  useEffect(() => {
+    if (lastTab.current === tab) return;
+    lastTab.current = tab;
+    usePlanUi.getState().setCtxFor(null);
+  }, [tab]);
 
   // Размер панели — ResizeObserver (без принудительной раскладки на каждом кадре пана).
   const ro = useRef<ResizeObserver | null>(null);
@@ -477,6 +626,8 @@ export function ContextPanel({
   const ref = useCallback((el: HTMLDivElement | null) => {
     ro.current?.disconnect();
     ro.current = null;
+    // Панель закрылась (крестик, удаление, Esc, смена шага) с фокусом внутри — фокус на план.
+    if (!el) keepFocusInPlan(elRef.current);
     elRef.current = el;
     if (!el) return;
     const measure = () => {
@@ -490,61 +641,37 @@ export function ContextPanel({
   }, []);
   useEffect(() => () => ro.current?.disconnect(), []);
 
-  // Новое выделение (в т.ч. из списка в панели или 3D) должно быть на виду.
-  const selKey = sel ? `${sel.type}:${sel.type === "wall" ? sel.wallId : sel.type === "point" ? sel.pointId : sel.openingId}` : "";
-  const revealed = useRef("");
-  useEffect(() => {
-    if (!sel) {
-      revealed.current = "";
-      return;
-    }
-    if (!size || dragging || revealed.current === selKey) return;
-    revealed.current = selKey;
-    const sb = selectionBox(room, walls, sel, view, dimPerp, labels);
-    if (!sb) return;
-    const m = 12;
-    // Высота только что смонтированной панели (size ещё может быть от прежнего выделения).
-    const panelH = elRef.current?.offsetHeight ?? size.h;
-    const bottom = docked ? height - panelH - 16 : height - m;
-    const b = sb.box;
-    let dx = 0;
-    let dy = 0;
-    if (b.x1 - b.x0 <= width - 2 * m) {
-      if (b.x0 < m) dx = m - b.x0;
-      else if (b.x1 > width - m) dx = width - m - b.x1;
-    }
-    if (b.y1 > bottom) dy = bottom - b.y1;
-    if (b.y0 + dy < m) dy = m - b.y0;
-    // Всё выделение не влезает над панелью — главное, чтобы был виден сам объект на стене.
-    const a = sb.anchor;
-    const top = m + 24;
-    const low = bottom - 24;
-    if (low > top && (a.y + dy < top || a.y + dy > low)) dy = (top + low) / 2 - a.y;
-    // Выделение почти целиком на виду (у края только плашка) — вид не дёргаем.
-    if (Math.abs(dx) > m || Math.abs(dy) > m) onReveal(dx, dy);
-  });
-
-  if (!sel) return null;
+  // Открыли с клавиатуры (Enter на ручке) — фокус в панель.
+  const focusIn = usePlanUi((u) => u.ctxFocus);
+  // Ждём замера: в невидимую (is-measuring) панель фокус не ставится.
+  useLayoutEffect(() => {
+    if (!focusIn || !shown || !size) return;
+    usePlanUi.getState().setCtxFocus(false);
+    // Первое поле или кнопка, но не «Удалить»: второй Enter не должен ничего удалить.
+    elRef.current
+      ?.querySelector<HTMLElement>("input, button:not(:disabled):not(.k-btn--danger)")
+      ?.focus({ preventScroll: true });
+  }, [focusIn, shown, size]);
 
   let content: JSX.Element | null = null;
-  let key = "";
-  if (sel.type === "wall") {
+  let label = "";
+  if (sel?.type === "wall") {
     const w = walls.find((x) => x.id === sel.wallId);
-    if (w) content = <WallContent wall={w} room={room} compact={docked} />;
-    key = `w:${sel.wallId}`;
-  } else if (sel.type === "opening") {
+    if (w) content = <WallContent wall={w} room={room} variant={variant} />;
+    label = w ? `Стена ${w.label}` : "";
+  } else if (sel?.type === "opening") {
     const o = room.openings.find((x) => x.id === sel.openingId);
     const w = o && walls.find((x) => x.id === o.wallId);
-    if (o && w) content = <OpeningContent o={o} wall={w} skirtH={skirtH} compact={docked} />;
-    key = `o:${sel.openingId}`;
-  } else {
-    content = <PointContent room={room} pointId={sel.pointId} compact={docked} />;
-    key = `p:${sel.pointId}`;
+    if (o && w) content = <OpeningContent o={o} wall={w} skirtH={skirtH} compact={compact} />;
+    label = o ? describeOpening(o) : "";
+  } else if (sel?.type === "point") {
+    content = <PointContent room={room} pointId={sel.pointId} variant={variant} />;
+    label = "Угол комнаты";
   }
-  if (!content) return null;
+  const visible = shown && !!content;
 
   let pos: { x: number; y: number } | null = null;
-  if (!docked && size) {
+  if (visible && sel && !docked && size) {
     const sb = selectionBox(room, walls, sel, view, dimPerp, labels);
     if (sb) {
       const avoid: Box[] = room.points.map((p) => {
@@ -555,21 +682,80 @@ export function ContextPanel({
         const r = spot.rect;
         avoid.push({ x0: r.x0 + view.tx, y0: r.y0 + view.ty, x1: r.x1 + view.tx, y1: r.y1 + view.ty });
       }
-      pos = place(sb.box, sb.dir, size.w, size.h, width, height, avoid);
+      const floor = room.points.map((p) => toScreen(view, p));
+      pos = place(sb.box, sb.dir, size.w, size.h, width, height, avoid, floor);
     }
   }
   const isDocked = docked || (!!size && !pos);
+
+  // Лист внизу — вписывание комнаты оставляет над ним место.
+  const sheetH = visible && isDocked && size ? size.h : 0;
+  useEffect(() => {
+    usePlanUi.getState().setSheetH(sheetH);
+  }, [sheetH]);
+  useEffect(() => () => usePlanUi.getState().setSheetH(0), []);
+
+  // Новое выделение (в т.ч. из списка в панели или 3D) должно быть на виду —
+  // над листом, если он открыт, и не под сводкой комнаты.
+  const selKey = selectionKey(sel);
+  const revealKey = sel ? `${selKey}${visible ? "+" : ""}#${revealTick}` : "";
+  const revealed = useRef("");
+  useEffect(() => {
+    if (!sel) {
+      revealed.current = "";
+      return;
+    }
+    if ((visible && !size) || dragging || revealed.current === revealKey) return;
+    revealed.current = revealKey;
+    const sb = selectionBox(room, walls, sel, view, dimPerp, labels);
+    if (!sb) return;
+    const m = 12;
+    // Высота только что смонтированной панели (size ещё может быть от прежнего выделения).
+    const panelH = visible && isDocked ? (elRef.current?.offsetHeight ?? size?.h ?? 0) : 0;
+    const bottom = panelH ? height - panelH - 16 : height - m;
+    const b = sb.box;
+    let dx = 0;
+    let dy = 0;
+    if (b.x1 - b.x0 <= width - 2 * m) {
+      if (b.x0 < m) dx = m - b.x0;
+      else if (b.x1 > width - m) dx = width - m - b.x1;
+    }
+    if (b.y1 > bottom) dy = bottom - b.y1;
+    if (b.y0 + dy < topInset) dy = topInset - b.y0;
+    // Всё выделение не влезает над панелью — главное, чтобы был виден сам объект на стене.
+    const a = sb.anchor;
+    const top = topInset + 24;
+    const low = bottom - 24;
+    if (low > top && (a.y + dy < top || a.y + dy > low)) dy = (top + low) / 2 - a.y;
+    // Выделение почти целиком на виду (у края только плашка) — вид не дёргаем.
+    if (Math.abs(dx) > m || Math.abs(dy) > m) onReveal(dx, dy);
+  });
+
+  if (!visible || !sel) return null;
+
+  // Esc внутри панели закрывает её и возвращает фокус на объект плана (поле ввода обрабатывает Esc само).
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Escape" || (e.target as HTMLElement).tagName === "INPUT") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const root = elRef.current?.closest<HTMLElement>(".pl-root");
+    const handle = root?.querySelector<HTMLElement>(`[data-plan-key="${selKey}"]`);
+    (handle ?? root)?.focus({ preventScroll: true });
+    usePlanUi.getState().setCtxFor(null);
+  };
+
   const style = isDocked || !pos ? undefined : { left: Math.round(pos.x), top: Math.round(pos.y) };
 
   return (
     <div
       ref={ref}
-      key={key}
-      className={`pl-ctx${isDocked ? " is-docked" : ""}${docked ? " is-compact" : ""}${dragging || chipEditing ? " is-hidden" : ""}${!size ? " is-measuring" : ""}`}
+      key={selKey}
+      className={`pl-ctx${isDocked ? " is-docked" : ""}${compact ? " is-compact" : ""}${variant === "bar" && sel.type !== "opening" ? " is-bar" : ""}${dragging || chipEditing ? " is-hidden" : ""}${!size ? " is-measuring" : ""}`}
       style={style}
-      role="dialog"
-      aria-label="Действия с выделенным"
+      role="group"
+      aria-label={label ? `${label}: действия` : "Действия с выделенным"}
       onPointerDown={(e) => e.stopPropagation()}
+      onKeyDown={onKeyDown}
     >
       {content}
     </div>

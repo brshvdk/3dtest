@@ -82,7 +82,7 @@
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 .rs-section-icon {
@@ -229,7 +229,19 @@
   width: 10px;
   height: 10px;
   border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.18);
+  /* Кольцо цвета текста: белый образец виден на светлой карточке, «Венге» — на тёмной. */
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 30%, transparent);
+}
+/* Сечение тёмного плинтуса («Венге») на тёмной карточке — контур поярче. */
+:root[data-theme="dark"] .rs-hero__icon .pn-prof__shape {
+  stroke: var(--text);
+  stroke-width: 1.25;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .rs-hero__icon .pn-prof__shape {
+    stroke: var(--text);
+    stroke-width: 1.25;
+  }
 }
 
 .rs-hero__stats {
@@ -407,7 +419,7 @@
 }
 .rs-table__note {
   margin-top: 2px;
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   line-height: 1.35;
   color: var(--text-3);
 }
@@ -798,6 +810,7 @@
 /* Фокус с клавиатуры поверх подсветки: отдельное синее кольцо. */
 .rs-chip:focus-visible,
 .rs-pc:focus-visible {
+  outline: none; /* своё кольцо вместо общего outline из base.css */
   box-shadow:
     0 0 0 2px var(--surface),
     0 0 0 4px var(--primary);
@@ -814,15 +827,31 @@
   height: 28px;
   padding: 0 10px;
   border-radius: var(--radius-pill);
-  font-size: var(--fs-sm);
+  font-size: var(--fs-md);
   font-weight: 650;
   white-space: nowrap;
 }
 .rs-chip small,
 .rs-pc small {
-  font-size: 0.86em;
+  font-size: var(--fs-sm);
   font-weight: 500;
   color: var(--text-2);
+}
+
+/* Номер комнаты в рамке — когда комнат больше, чем оттенков (как .rs-sheet__rno на печати). */
+.rs-rno {
+  display: inline-grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  margin-right: 4px;
+  padding: 0 3px;
+  border: 1px solid color-mix(in srgb, currentColor 55%, transparent);
+  border-radius: 4px;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: 1px;
 }
 
 .rs-bars {
@@ -835,12 +864,12 @@
 }
 .rs-bar-row {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 20px minmax(0, 1fr);
   align-items: center;
   gap: 6px;
 }
 .rs-bar-row__no {
-  font-size: var(--fs-xs);
+  font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text-3);
   text-align: right;
@@ -873,23 +902,36 @@
 .rs-pc__label {
   max-width: 100%;
   overflow: hidden;
-  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  font-size: var(--fs-md);
   font-weight: 650;
   white-space: nowrap;
 }
+/* Длины, по которым режут, — не мельче 12 px. */
 .rs-pc__len {
-  font-size: 10.5px;
+  font-size: var(--fs-sm);
   color: var(--text-2);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-/* «A 1 из 2» на широком куске, просто «A» — на узком. */
-@container (max-width: 78px) {
+/* «A2 кусок 1 из 2» (≈ 93 px) на широком куске, «A2 1/2» — на среднем, просто «A2» — на узком. */
+.rs-pc__part-short {
+  display: none;
+}
+@container (max-width: 94px) {
+  .rs-pc__part-long {
+    display: none;
+  }
+  .rs-pc__part-short {
+    display: inline;
+  }
+}
+@container (max-width: 58px) {
   .rs-pc__part {
     display: none;
   }
 }
-@container (max-width: 44px) {
+@container (max-width: 40px) {
   .rs-pc__len {
     display: none;
   }
@@ -937,7 +979,7 @@
   padding: 0 3px;
   border-radius: 3px;
   background: var(--surface-3);
-  font-size: 10.5px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -949,16 +991,22 @@
 .rs-waste__tag {
   padding: 0 3px;
   border-radius: 3px;
-  font-size: 10px;
+  font-size: var(--fs-sm);
   font-weight: 600;
   white-space: nowrap;
 }
-@container (max-width: 74px) {
+@container (max-width: 84px) {
   .rs-waste__tag {
     display: none;
   }
 }
-@container (max-width: 34px) {
+/* Узкий обрезок: сначала уходит галочка (зелёная штриховка и так говорит «пригодится»), потом длина. */
+@container (max-width: 46px) {
+  .rs-waste__len > svg {
+    display: none;
+  }
+}
+@container (max-width: 31px) {
   .rs-waste__len {
     display: none;
   }
@@ -1006,6 +1054,11 @@
 .rs-cut__hint b {
   font-weight: 650;
 }
+.rs-cut__elsewhere {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-2);
+}
 
 .rs-legend {
   display: flex;
@@ -1018,6 +1071,12 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+.rs-legend .rs-rno {
+  min-width: 14px;
+  height: 14px;
+  margin-right: 3px;
+  font-size: var(--fs-xs);
 }
 .rs-legend__sw {
   display: inline-block;
@@ -1373,11 +1432,21 @@
   padding: 0 2px;
   background: #fff;
 }
+.rs-sheet__t-mid,
 .rs-sheet__t-short {
   display: none;
 }
-@container (max-width: 64px) {
+/* «A кусок 1 из 2 · 1,45» → «A 1/2 · 1,45» → «A». */
+@container (max-width: 124px) {
   .rs-sheet__pc .rs-sheet__t-long {
+    display: none;
+  }
+  .rs-sheet__t-mid {
+    display: inline;
+  }
+}
+@container (max-width: 64px) {
+  .rs-sheet__t-mid {
     display: none;
   }
   .rs-sheet__t-short {
@@ -1447,6 +1516,10 @@
 }
 
 @media print {
+  /* Тёмная тема: при «Фоновой графике» Chrome заливает поля листа цветом холста тёмной схемы. Лист — всегда светлый. */
+  :root {
+    color-scheme: light !important;
+  }
   .print-preview {
     position: static;
     padding: 0;

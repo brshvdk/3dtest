@@ -1,19 +1,27 @@
 /**
  * Указатель и клавиатура на плане: пан (мышь/один палец), зум колесом и
  * щипком, выделение, перетаскивание стен/вершин/проёмов с привязками,
- * двойной клик/тап по стене — новый угол, стрелки — сдвиг выделенного.
+ * двойной клик/тап по стене — новый угол, стрелки — сдвиг выделенного
+ * (когда фокус на плане или на его ручке).
  *
  * Правки идут в store жестом: beginGesture → правки { transient: true } →
  * endGesture (одна запись истории на всё перетаскивание).
  */
-import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+} from "react";
 import { projectToSegment, sub } from "../domain/geometry";
 import type { Room, Vec2, Wall } from "../domain/types";
 import { getRoomWalls } from "../state/hooks";
 import { useAppStore } from "../state/store";
 import { toast } from "../ui/kit";
 import { hitSkirting, hitTest, type PlanTarget, type SkirtLine } from "./geom";
-import { usePlanUi, type HoverTarget } from "./planUi";
+import { claimSelection, selectionKey, selectOnPlan, usePlanUi, type HoverTarget } from "./planUi";
 import { toWorld, zoomAt, type View } from "./viewport";
 
 /** Актуальные данные рендера, нужные обработчикам (без пересоздания обработчиков). */
@@ -60,10 +68,16 @@ const DOUBLE_PX = 26;
 const snap = (v: number, step: number) => Math.round(v / step) * step;
 const round = (v: number, d = 4) => Math.round(v * 10 ** d) / 10 ** d;
 
-function isTyping(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
+/**
+ * Стрелки двигают выделенное, только когда фокус на самом плане (корень
+ * .pl-root после клика по плану) или на его ручке (плашка стены, ручка угла
+ * или проёма — data-plan-key). В полях, кнопках панели, переключателях —
+ * их обычное поведение.
+ */
+function planKeyTarget(e: { target: EventTarget | null; currentTarget: EventTarget | null }): string | null {
+  if (e.target === e.currentTarget) return "";
+  if (!(e.target instanceof HTMLElement)) return null;
+  return e.target.dataset.planKey ?? null;
 }
 
 const activeRoom = (): Room => {
@@ -328,6 +342,7 @@ export function useInteraction({
         const before = activeRoom();
         st.splitWall(t.id, round(snap(t.along, 0.01), 3));
         if (activeRoom() === before) toast("Здесь угол не поставить — слишком близко к краю стены", "warning");
+        else claimSelection();
       } else if (t.type === "opening") {
         st.setPanelTab("openings");
       }
@@ -381,13 +396,22 @@ export function useInteraction({
     }
 
     const touch = e.pointerType === "touch";
+    if (!touch) {
+      // Стрелки двигают выделенное, только когда фокус на плане. Обычно его ставит
+      // сам mousedown, но выделение перерисовывает слой под курсором, и браузер
+      // сбрасывает фокус на <body> — тогда ставим его на план сами.
+      const host = hostRef.current;
+      window.setTimeout(() => {
+        const a = document.activeElement;
+        if (host && host.isConnected && (!a || a === document.body)) host.focus({ preventScroll: true });
+      }, 0);
+    }
     const world = toWorld(d.view, pos.x, pos.y);
     const target = hitTest(d.room, d.walls, world, tolerances(touch, d.view.s));
-    const st = useAppStore.getState();
     const roomId = d.room.id;
-    if (target?.type === "point") st.select({ type: "point", roomId, pointId: target.id });
-    else if (target?.type === "opening") st.select({ type: "opening", roomId, openingId: target.id });
-    else if (target?.type === "wall") st.select({ type: "wall", roomId, wallId: target.id });
+    if (target?.type === "point") selectOnPlan({ type: "point", roomId, pointId: target.id });
+    else if (target?.type === "opening") selectOnPlan({ type: "opening", roomId, openingId: target.id });
+    else if (target?.type === "wall") selectOnPlan({ type: "wall", roomId, wallId: target.id });
     gesture.current = { kind: "pending", id: e.pointerId, sx: pos.x, sy: pos.y, world, target, touch, alt: e.altKey };
   };
 
@@ -491,73 +515,87 @@ export function useInteraction({
 
   /* ------------------------------ Клавиатура ------------------------------ */
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
-      const k =
-        e.key === "ArrowLeft"
-          ? { x: -1, y: 0 }
-          : e.key === "ArrowRight"
-            ? { x: 1, y: 0 }
-            : e.key === "ArrowUp"
-              ? { x: 0, y: -1 }
-              : e.key === "ArrowDown"
-                ? { x: 0, y: 1 }
-                : null;
-      if (!k) return;
-      const st = useAppStore.getState();
-      const sel = st.selection;
-      const room = activeRoom();
-      if (!sel || sel.roomId !== room.id) return;
-      const step = e.shiftKey ? 0.1 : 0.01;
-      const walls = getRoomWalls(room);
-      const begin = () => {
-        if (!keyGesture.current) {
-          st.beginGesture();
-          keyGesture.current = true;
-        }
-      };
-      if (sel.type === "opening") {
-        const o = room.openings.find((x) => x.id === sel.openingId);
-        const w = o && walls.find((x) => x.id === o.wallId);
-        if (!o || !w) return;
-        const dp = k.x * w.dir.x + k.y * w.dir.y;
-        if (Math.abs(dp) < 0.3) return;
-        e.preventDefault();
-        begin();
-        st.moveOpening(o.id, w.id, round(Math.max(0, o.offset + Math.sign(dp) * step)), { transient: true });
-      } else if (sel.type === "wall") {
-        const w = walls.find((x) => x.id === sel.wallId);
-        if (!w) return;
-        const dp = k.x * w.normalIn.x + k.y * w.normalIn.y;
-        if (Math.abs(dp) < 0.3) return;
-        e.preventDefault();
-        begin();
-        st.moveWall(w.id, Math.sign(dp) * step, { transient: true });
-      } else if (sel.type === "point") {
-        const pt = room.points.find((p) => p.id === sel.pointId);
-        if (!pt) return;
-        e.preventDefault();
-        begin();
-        st.moveVertex(pt.id, { x: round(pt.x + k.x * step), y: round(pt.y + k.y * step) }, { transient: true });
-      }
-    };
-    const onKeyUp = () => {
-      if (keyGesture.current) {
-        keyGesture.current = false;
-        useAppStore.getState().endGesture();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", onKeyUp);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", onKeyUp);
-      onKeyUp();
-    };
+  const endKeyGesture = useCallback(() => {
+    if (keyGesture.current) {
+      keyGesture.current = false;
+      useAppStore.getState().endGesture();
+    }
   }, []);
+
+  const onKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+    const k =
+      e.key === "ArrowLeft"
+        ? { x: -1, y: 0 }
+        : e.key === "ArrowRight"
+          ? { x: 1, y: 0 }
+          : e.key === "ArrowUp"
+            ? { x: 0, y: -1 }
+            : e.key === "ArrowDown"
+              ? { x: 0, y: 1 }
+              : null;
+    const del = e.key === "Delete" || e.key === "Backspace";
+    if (!k && !del) return;
+    const planKey = planKeyTarget(e);
+    if (planKey === null) return;
+    const st = useAppStore.getState();
+    const room = activeRoom();
+    // Фокус на ручке объекта — стрелки двигают, а Delete (глобальная горячая клавиша) удаляет именно его.
+    if (planKey && selectionKey(st.selection) !== planKey) {
+      const i = planKey.indexOf(":");
+      const type = planKey.slice(0, i);
+      const id = planKey.slice(i + 1);
+      if (type === "wall") st.select({ type, roomId: room.id, wallId: id });
+      else if (type === "point") st.select({ type, roomId: room.id, pointId: id });
+      else if (type === "opening") st.select({ type, roomId: room.id, openingId: id });
+    }
+    if (!k) return;
+    const sel = useAppStore.getState().selection;
+    if (!sel || sel.roomId !== room.id) return;
+    const step = e.shiftKey ? 0.1 : 0.01;
+    const walls = getRoomWalls(room);
+    const begin = () => {
+      if (!keyGesture.current) {
+        st.beginGesture();
+        keyGesture.current = true;
+      }
+    };
+    if (sel.type === "opening") {
+      const o = room.openings.find((x) => x.id === sel.openingId);
+      const w = o && walls.find((x) => x.id === o.wallId);
+      if (!o || !w) return;
+      const dp = k.x * w.dir.x + k.y * w.dir.y;
+      if (Math.abs(dp) < 0.3) return;
+      e.preventDefault();
+      begin();
+      st.moveOpening(o.id, w.id, round(Math.max(0, o.offset + Math.sign(dp) * step)), { transient: true });
+    } else if (sel.type === "wall") {
+      const w = walls.find((x) => x.id === sel.wallId);
+      if (!w) return;
+      const dp = k.x * w.normalIn.x + k.y * w.normalIn.y;
+      if (Math.abs(dp) < 0.3) return;
+      e.preventDefault();
+      begin();
+      st.moveWall(w.id, Math.sign(dp) * step, { transient: true });
+    } else if (sel.type === "point") {
+      const pt = room.points.find((p) => p.id === sel.pointId);
+      if (!pt) return;
+      e.preventDefault();
+      begin();
+      st.moveVertex(pt.id, { x: round(pt.x + k.x * step), y: round(pt.y + k.y * step) }, { transient: true });
+    }
+  };
+
+  // Отпускание клавиши — конец жеста (в т.ч. если фокус успел уйти с плана).
+  useEffect(() => {
+    window.addEventListener("keyup", endKeyGesture);
+    window.addEventListener("blur", endKeyGesture);
+    return () => {
+      window.removeEventListener("keyup", endKeyGesture);
+      window.removeEventListener("blur", endKeyGesture);
+      endKeyGesture();
+    };
+  }, [endKeyGesture]);
 
   // Размонтирование посреди жеста — закрываем его, чтобы история не «зависла».
   useEffect(
@@ -567,7 +605,7 @@ export function useInteraction({
         useAppStore.getState().endGesture();
       }
       gesture.current = null;
-      usePlanUi.setState({ hover: null, inRoom: false, drag: null, editing: null });
+      usePlanUi.setState({ hover: null, inRoom: false, drag: null, editing: null, ctxFor: null, sheetH: 0 });
       clearSegHover();
     },
     [],
@@ -581,5 +619,15 @@ export function useInteraction({
   /** Указатель нажат (в т.ч. ещё не начато перетаскивание). */
   const isPressed = useCallback(() => gesture.current !== null, []);
 
-  return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onPointerLeave, isBusy, isPressed };
+  return {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel,
+    onPointerLeave,
+    onKeyDown,
+    onKeyUp: endKeyGesture,
+    isBusy,
+    isPressed,
+  };
 }

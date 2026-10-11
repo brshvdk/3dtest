@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { FIT_TOLERANCE } from "../cutting";
 import { estimateProject, fastenersForRun } from "../estimate";
 import type { OrderLine, ProductEstimate } from "../estimate";
 import { CLIP_DOWEL_NAME, CLIP_DOWEL_PRICE, SKIRTING_CATALOG } from "../skirtingCatalog";
@@ -19,7 +20,10 @@ describe("fastenersForRun", () => {
     expect(fastenersForRun(4, 0.5)).toBe(9);
     expect(fastenersForRun(3, 0.5)).toBe(7);
     expect(fastenersForRun(1.2, 0.4)).toBe(4); // 1,2/0,4 = 2,9999… → 3 + 1
-    expect(fastenersForRun(0.15, 0.5)).toBe(2);
+    // Кусок 10–30 см держит одна точка, короче 10 см — фурнитура или клей.
+    expect(fastenersForRun(0.3, 0.5)).toBe(2);
+    expect(fastenersForRun(0.15, 0.5)).toBe(1);
+    expect(fastenersForRun(0.06, 0.5)).toBe(0);
     expect(fastenersForRun(0.04, 0.5)).toBe(0);
   });
 });
@@ -51,8 +55,9 @@ describe("ПВХ 55 с фурнитурой", () => {
       endCapsLeft: 1,
       endCapsRight: 1,
       connectors: 3,
-      // прямые участки 1,525·2 + 3 + 4 + 3 → 5+5+7+9+7 = 33 → ×1,1 = 36,3 → 37
-      fasteners: 37,
+      // прямые участки 1,525·2 + 3 + 4 + 3 → 5+5+7+9+7 = 33, + 3 стыка (у каждого торца
+      // планки — своя точка) = 36 → ×1,1 = 39,6 → 40
+      fasteners: 40,
       dowels: 0,
       glue: 0,
     });
@@ -68,12 +73,12 @@ describe("ПВХ 55 с фурнитурой", () => {
     expect(line(p, "endCapLeft")).toMatchObject({ name: "Заглушка левая", qty: 1, total: 35 });
     expect(line(p, "endCapRight")).toMatchObject({ name: "Заглушка правая", qty: 1, total: 35 });
     expect(line(p, "connector")).toMatchObject({ name: "Соединитель", qty: 3, total: 105 });
-    expect(line(p, "fastener")).toMatchObject({ name: "Дюбель-гвоздь 6×40", qty: 37, total: 111 });
+    expect(line(p, "fastener")).toMatchObject({ name: "Дюбель-гвоздь 6×40", qty: 40, total: 120 });
     expect(new Set(p.lines.map((l) => l.id)).size).toBe(p.lines.length);
   });
 
   it("итоги проекта", () => {
-    expect(p.cost).toBe(1400 + 180 + 35 + 35 + 105 + 111);
+    expect(p.cost).toBe(1400 + 180 + 35 + 35 + 105 + 120);
     expect(est.totalCost).toBe(p.cost);
     expect(est.lines).toEqual(p.lines);
     expect(est.netLength).toBeCloseTo(13.05, 9);
@@ -102,8 +107,12 @@ describe("материалы", () => {
   it("полиуретан на клей: тубы по расходу, углы — запил, без фурнитуры", () => {
     const est = estimateProject(makeProject([makeRoom(RECT)], { productId: "polyurethane-120" }));
     const p = est.products[0];
-    expect(kinds(p)).toEqual(["plank", "glue"]);
+    // Монтажный клей + клей для стыков и запилов + акриловый герметик под покраску.
+    expect(kinds(p)).toEqual(["plank", "glue", "jointGlue", "sealant"]);
     expect(line(p, "glue")).toMatchObject({ qty: 3, unit: "туб", unitPrice: 600 }); // ceil(14 / 6)
+    expect(line(p, "jointGlue")).toMatchObject({ qty: 1, unit: "туб" }); // 4 угла + 2 стыка
+    expect(line(p, "sealant")).toMatchObject({ qty: 1, unit: "туб" }); // ceil(14 / 15)
+    expect(line(p, "sealant")!.name).toContain("акриловый");
     expect(line(p, "plank")!.note).toContain("углы — запил 45°");
     expect(p.accessories).toMatchObject({ innerCorners: 0, connectors: 0, fasteners: 0, glue: 3 });
     // 4 → 2+2, 3 → 2+1; два куска по 1,0 с пропилом не влезают в 2,0 → 8 планок.
@@ -111,10 +120,14 @@ describe("материалы", () => {
     expect(p.planksToOrder).toBe(9);
   });
 
-  it("керамика: элементы 0,6 м и плиточный клей в кг", () => {
+  it("керамика: элементы 0,6 м, плиточный клей мешками, затирка", () => {
     const p = estimateProject(makeProject([makeRoom(RECT)], { productId: "ceramic-80" })).products[0];
-    expect(kinds(p)).toEqual(["plank", "glue"]);
-    expect(line(p, "glue")).toMatchObject({ qty: 6, unit: "кг", name: "Клей плиточный" }); // ceil(14·0,4)
+    expect(kinds(p)).toEqual(["plank", "glue", "grout"]);
+    // Расход ceil(14·0,4) = 6 кг → 2 мешка по 5 кг; цена мешка = 5 × цена кг.
+    expect(p.accessories.glue).toBe(6);
+    expect(line(p, "glue")).toMatchObject({ qty: 2, unit: "шт", name: "Клей плиточный (мешок 5 кг)", unitPrice: 300 });
+    expect(line(p, "glue")!.note).toContain("6 кг");
+    expect(line(p, "grout")).toMatchObject({ qty: 1, unit: "шт" });
     // 4 м → 6×0,6 + 0,4; 3 м → 5×0,6 ровно → 22 целых + 2 по 0,4 (вместе с пропилом > 0,6).
     expect(p.pieces).toHaveLength(24);
     expect(p.planksMin).toBe(24);
@@ -137,10 +150,17 @@ describe("материалы", () => {
     expect(line(p, "glue")!.qty).toBe(3); // ceil(18 / 7)
   });
 
-  it("углы не 90° — пометка у строки уголков", () => {
+  it("углы не 90° — отдельная строка регулируемых уголков, обычных меньше", () => {
     const bay = makeRoom([[0, 0], [4, 0], [4, 2], [3, 3], [0, 3]]);
     const p = estimateProject(makeProject([bay])).products[0];
-    expect(line(p, "innerCorner")!.note).toContain("углов не 90°: 2");
+    const corners = p.lines.filter((l) => l.kind === "innerCorner");
+    expect(corners.map((l) => [l.name, l.qty])).toEqual([
+      ["Угол внутренний", 3],
+      ["Угол внутренний регулируемый", 2],
+    ]);
+    expect(plain(corners[1].note!)).toBe("в цвет «Белый»; 2 угла 135° — обычный уголок не встанет");
+    expect(corners[1].id).not.toBe(corners[0].id);
+    expect(p.accessories.innerCorners).toBe(5);
     expect(p.warnings.some((w) => w.startsWith("Комната: "))).toBe(true);
   });
 });
@@ -203,7 +223,8 @@ describe("правила проекта", () => {
   it("обмен обрезками между комнатами экономит планки", () => {
     // Ниша 1,2×1,2, одна стена занята шкафом: 3 куска по 1,2 на комнату.
     const rooms = [0, 1, 2].map((i) => ({
-      ...makeRoom([[0, 0], [1.2, 0], [1.2, 1.2], [0, 1.2]], [op(`k${i}`, "furniture", 0, 0, { width: 1.2 })]),
+      // Глубина 0 — «просто участок без плинтуса»: боковины не закрывают соседние стены.
+      ...makeRoom([[0, 0], [1.2, 0], [1.2, 1.2], [0, 1.2]], [op(`k${i}`, "furniture", 0, 0, { width: 1.2, depth: 0 })]),
       id: `n${i}`,
       name: `Ниша ${i + 1}`,
     }));
@@ -279,7 +300,11 @@ describe("инварианты сметы на случайных проекта
     const placed = p.cutPlan.bars.flatMap((b) => b.pieces.map((x) => x.id)).sort();
     expect(placed).toEqual(p.pieces.map((x) => x.id).sort());
     const material = sum(p.pieces.map((x) => x.length));
-    expect(material).toBeGreaterThanOrEqual(p.netLength - 1e-6);
+    // На фурнитуре участок до L + FIT_TOLERANCE закрывают целые планки (недостачу прячут уголки/заглушки).
+    const slack = p.product.cornerMethod === "fittings" ? p.pieces.length * FIT_TOLERANCE : 0;
+    expect(material).toBeGreaterThanOrEqual(p.netLength - slack - 1e-6);
+    // Ни один кусок не длиннее планки.
+    for (const x of p.pieces) expect(x.length).toBeLessThanOrEqual(L + 1e-6);
     expect(p.planksMin * L).toBeGreaterThanOrEqual(material - 1e-6);
     // Строки: только ненулевые, итог = Σ, у плашек — количество к заказу.
     for (const l of p.lines) {
@@ -292,7 +317,8 @@ describe("инварианты сметы на случайных проекта
     expect(p.cost).toBeCloseTo(sum(p.lines.map((l) => l.total)), 2);
     if (p.planksToOrder > 0) expect(line(p, "plank")!.qty).toBe(p.planksToOrder);
     else expect(line(p, "plank")).toBeUndefined();
-    // Фурнитура — по комнатам; при запиле её нет вовсе.
+    // Фурнитура — по комнатам; при запиле уголков нет, а заглушки и соединители
+    // остаются только у ПВХ с кабель-каналом.
     const a = p.accessories;
     if (p.netLength <= 0) {
       expect(Object.values(a).every((v) => v === 0)).toBe(true);
@@ -302,9 +328,18 @@ describe("инварианты сметы на случайных проекта
       expect(a.endCapsLeft).toBe(sum(p.rooms.map((r) => r.endCaps.left)));
       expect(a.endCapsRight).toBe(a.endCapsLeft);
       expect(a.connectors).toBe(p.joints);
+      const cornerQty = sum(p.lines.filter((l) => l.kind === "innerCorner" || l.kind === "outerCorner").map((l) => l.qty));
+      expect(cornerQty).toBe(a.innerCorners + a.outerCorners);
     } else {
-      expect([a.innerCorners, a.outerCorners, a.endCapsLeft, a.endCapsRight, a.connectors]).toEqual([0, 0, 0, 0, 0]);
-      expect(kinds(p).some((k) => k.startsWith("endCap") || k.endsWith("Corner") || k === "connector")).toBe(false);
+      expect([a.innerCorners, a.outerCorners]).toEqual([0, 0]);
+      expect(kinds(p).some((k) => k.endsWith("Corner"))).toBe(false);
+      if (p.product.cableChannel) {
+        expect(a.endCapsLeft).toBe(sum(p.rooms.map((r) => r.endCaps.left)));
+        expect(a.connectors).toBe(p.joints);
+      } else {
+        expect([a.endCapsLeft, a.endCapsRight, a.connectors]).toEqual([0, 0, 0]);
+        expect(kinds(p).some((k) => k.startsWith("endCap") || k === "connector")).toBe(false);
+      }
     }
     if (p.product.fastening === "clips") expect(a.dowels).toBe(a.fasteners);
     else expect(a.dowels).toBe(0);
@@ -379,5 +414,191 @@ describe("инварианты сметы на случайных проекта
     const p = estimateProject(makeProject([room])).products[0];
     expect(p.netLength).toBeCloseTo(14 - 0.95, 9);
     expect(p.accessories).toMatchObject({ innerCorners: 4, endCapsLeft: 1, endCapsRight: 1 });
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* Находки аудита: раскрой, допуски, фурнитура, расходники              */
+/* ------------------------------------------------------------------ */
+
+describe("стыки на длинных стенах подбираются под обрезки", () => {
+  const rect = (w: number, h: number) => makeRoom([[0, 0], [w, 0], [w, h], [0, h]]);
+
+  it("2,60×2,70, ПВХ 55: 5 планок, а не 8 (стены не делятся пополам)", () => {
+    const p = estimateProject(makeProject([rect(2.6, 2.7)])).products[0];
+    expect(p.planksMin).toBe(5);
+    expect(p.planksToOrder).toBe(6);
+    expect(p.joints).toBe(4);
+    // Каждый кусок ≥ мин. куска 30 см, каждая стена собрана из своих кусков.
+    for (const x of p.pieces) expect(x.length).toBeGreaterThanOrEqual(0.3 - 1e-9);
+    for (const id of ["r:p0:1", "r:p1:1", "r:p2:1", "r:p3:1"]) {
+      const wall = p.rooms[0].segments.find((s) => s.id === id)!;
+      const parts = p.pieces.filter((x) => x.segmentIds[0] === id);
+      expect(parts).toHaveLength(2);
+      expect(sum(parts.map((x) => x.length))).toBeCloseTo(wall.length, 6);
+    }
+  });
+
+  it("Г-образная 5×4 (вырез 2×1,5), МДФ 80: 8 планок по раскрою, 9 заказать", () => {
+    const room = makeRoom([[0, 0], [5, 0], [5, 2.5], [3, 2.5], [3, 4], [0, 4]]);
+    const p = estimateProject(makeProject([room], { productId: "mdf-80" })).products[0];
+    expect(p.planksMin).toBe(8);
+    expect(p.planksToOrder).toBe(9);
+  });
+
+  it("5,1×3, ПВХ 55: 7 планок", () => {
+    expect(estimateProject(makeProject([rect(5.1, 3)])).products[0].planksMin).toBe(7);
+  });
+
+  it("обмен обрезками и раздельный раскрой: общий не хуже раздельного", () => {
+    const rooms = [rect(2.6, 2.7), rect(5.1, 3)].map((r, i) => ({ ...r, id: `r${i}`, name: `К${i}` }));
+    const shared = estimateProject(makeProject(rooms, { shareOffcuts: true })).products[0];
+    const separate = estimateProject(makeProject(rooms, { shareOffcuts: false })).products[0];
+    expect(separate.planksMin).toBe(12);
+    expect(shared.planksMin).toBeLessThanOrEqual(separate.planksMin);
+  });
+});
+
+describe("монтаж на фурнитуру: допуск на длину участка", () => {
+  const square = (a: number) => makeRoom([[0, 0], [a, 0], [a, a], [0, a]]);
+
+  it("стена на 5–10 мм длиннее планки закрывается одной планкой, без соединителей", () => {
+    for (const a of [2.5, 2.505, 2.51]) {
+      const p = estimateProject(makeProject([square(a)])).products[0];
+      expect(p.planksMin).toBe(4);
+      expect(p.planksToOrder).toBe(5);
+      expect(p.joints).toBe(0);
+      expect(p.accessories.connectors).toBe(0);
+    }
+  });
+
+  it("при запиле допуска нет: стык на каждой стене", () => {
+    const p = estimateProject(makeProject([square(2.505)], {}, { "pvc-55": { cornerMethod: "miter" } })).products[0];
+    expect(p.joints).toBe(4);
+  });
+});
+
+describe("цена планки зависит от длины", () => {
+  it("МДФ 80: 2,4 м по 550 ₽, 2,8 м — по цене погонного метра", () => {
+    const at = (length: number) =>
+      estimateProject(makeProject([makeRoom(RECT)], { productId: "mdf-80" }, { "mdf-80": { length } })).products[0];
+    const short = at(2.4);
+    const long = at(2.8);
+    expect(line(short, "plank")!.unitPrice).toBe(550);
+    expect(line(long, "plank")!.unitPrice).toBe(Math.round((550 / 2.4) * 2.8));
+    // Та же комната: заказ длиннее — не дешевле.
+    expect(line(long, "plank")!.total).toBeGreaterThanOrEqual(line(short, "plank")!.total);
+  });
+
+  it("керамика 0,3 / 0,6 / 1,2 м: стоимость плитки различается только обрезками", () => {
+    const bath = makeRoom([[0, 0], [1.7, 0], [1.7, 1.5], [0, 1.5]]);
+    const totals = [0.3, 0.6, 1.2].map(
+      (length) =>
+        line(
+          estimateProject(makeProject([bath], { productId: "ceramic-80" }, { "ceramic-80": { length } })).products[0],
+          "plank",
+        )!.total,
+    );
+    // Было 6 090 / 3 340 / 1 840 ₽ (в 3,3 раза); теперь разброс — запас и обрезки, не больше 20 %.
+    expect(Math.max(...totals) / Math.min(...totals)).toBeLessThan(1.2);
+  });
+
+  it("своя цена пользователя не пересчитывается", () => {
+    const p = estimateProject(
+      makeProject([makeRoom(RECT)], { productId: "mdf-80" }, { "mdf-80": { length: 2.8, price: 500 } }),
+    ).products[0];
+    expect(line(p, "plank")!.unitPrice).toBe(500);
+  });
+});
+
+describe("керамика: пропил уходит в шов", () => {
+  it("ванная 1,7×1,5, элемент 0,6: две половины 0,3 — из одного элемента", () => {
+    const p = estimateProject(
+      makeProject([makeRoom([[0, 0], [1.7, 0], [1.7, 1.5], [0, 1.5]])], { productId: "ceramic-80", kerf: 0.003 }),
+    ).products[0];
+    expect(p.planksMin).toBe(11);
+    expect(p.cutPlan.kerf).toBe(0);
+    const halves = p.cutPlan.bars.find((b) => b.pieces.length === 2 && b.pieces.every((x) => Math.abs(x.length - 0.3) < 1e-9));
+    expect(halves).toBeDefined();
+    expect(halves!.waste).toBe(0);
+  });
+
+  it("ванна в комнате — санитарный герметик", () => {
+    const room = makeRoom([[0, 0], [2, 0], [2, 1.7], [0, 1.7]], [op("b", "furniture", 0, 0, {}, "furn-bath")]);
+    const p = estimateProject(makeProject([room], { productId: "ceramic-80" })).products[0];
+    expect(kinds(p)).toEqual(["plank", "glue", "grout", "sealant"]);
+    expect(line(p, "sealant")!.name).toContain("санитарный");
+  });
+});
+
+describe("запил у ПВХ с кабель-каналом", () => {
+  const room = makeRoom([[0, 0], [5, 0], [5, 2.5], [3, 2.5], [3, 4], [0, 4]], [op("d", "door", 0, 1.5)]);
+
+  it("уголков нет, а заглушки у двери и соединители на стыках остаются", () => {
+    const p = estimateProject(makeProject([room], {}, { "pvc-55": { cornerMethod: "miter" } })).products[0];
+    expect(kinds(p)).toEqual(["plank", "endCapLeft", "endCapRight", "connector", "fastener"]);
+    expect(line(p, "endCapLeft")!.qty).toBe(1);
+    expect(line(p, "endCapRight")!.qty).toBe(1);
+    expect(line(p, "connector")!.qty).toBe(p.joints);
+    expect(p.joints).toBeGreaterThan(0);
+  });
+
+  it("МДФ под покраску на запиле — без заглушек и соединителей", () => {
+    const p = estimateProject(makeProject([room], { productId: "mdf-100-paint" })).products[0];
+    expect(kinds(p).some((k) => k.startsWith("endCap") || k === "connector")).toBe(false);
+    expect(kinds(p)).toContain("sealant");
+    expect(kinds(p)).not.toContain("jointGlue");
+  });
+});
+
+describe("углы не 90°", () => {
+  it("эркер: регулируемые уголки внутренние и наружные отдельными строками", () => {
+    // Эркер 2,6×0,8 на стене 5 м: 2 угла 135° внутренних, 2 — наружных (225°).
+    const room = makeRoom([[0, 0], [5, 0], [5, 4], [3.8, 4], [3, 4.8], [2, 4.8], [1.2, 4], [0, 4]]);
+    const p = estimateProject(makeProject([room])).products[0];
+    const names = p.lines.filter((l) => l.kind === "innerCorner" || l.kind === "outerCorner").map((l) => [l.name, l.qty]);
+    expect(names).toEqual([
+      ["Угол внутренний", 4],
+      ["Угол внутренний регулируемый", 2],
+      ["Угол наружный регулируемый", 2],
+    ]);
+    const miter = estimateProject(makeProject([room], {}, { "pvc-55": { cornerMethod: "miter" } })).products[0];
+    expect(line(miter, "plank")!.note).toContain("углы 135° — запил 22,5°");
+  });
+
+  it("отклонение 1–3° — обычный угол: без регулируемых уголков и предупреждения", () => {
+    // Правый нижний угол сдвинут на 7 см: углы 91,3° и 88,7°.
+    const room = makeRoom([[0, 0], [4, 0], [4.07, 3], [0, 3]]);
+    const p = estimateProject(makeProject([room])).products[0];
+    expect(p.rooms[0].corners.nonRight).toBe(0);
+    expect(p.lines.filter((l) => l.kind === "innerCorner").map((l) => l.qty)).toEqual([4]);
+    expect(p.warnings).toEqual([]);
+  });
+});
+
+describe("крепёж по кускам", () => {
+  it("4×3 ПВХ: (32 + 4 стыка) · 1,1 → 40", () => {
+    const p = estimateProject(makeProject([makeRoom(RECT)])).products[0];
+    expect(p.joints).toBe(4);
+    expect(p.accessories.fasteners).toBe(40);
+  });
+
+  it("кусок 6 см у двери не крепится, 15 см — одна точка", () => {
+    // Наличник выступает на 4 см: дверь в offset 0,10 оставляет у угла 6 см, в 0,19 — 15 см.
+    const at = (offset: number) =>
+      estimateProject(makeProject([makeRoom(RECT, [op("d", "door", 0, offset)])])).products[0].accessories.fasteners;
+    // 0 + 7 (2,99) + 7 + 9 + 7 + 4 стыка = 34 → 37,4 → 38
+    expect(at(0.1)).toBe(38);
+    // 1 + 7 (2,90) + 7 + 9 + 7 + 4 стыка = 35 → 38,5 → 39
+    expect(at(0.19)).toBe(39);
+  });
+});
+
+describe("мебель в углу в смете", () => {
+  it("кухня 3 м на стене B комнаты 4×3: 9,8 м, 4 планки по раскрою, 5 заказать", () => {
+    const p = estimateProject(makeProject([makeRoom(RECT, [op("k", "furniture", 1, 0, { width: 3 })])])).products[0];
+    expect(p.netLength).toBeCloseTo(9.8, 9);
+    expect(p.planksMin).toBe(4);
+    expect(p.planksToOrder).toBe(5);
   });
 });

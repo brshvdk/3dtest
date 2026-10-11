@@ -1075,4 +1075,29 @@
   .pn-chip {
     height: 36px;
   }
+  /* Образцы цвета: круг крупнее, а зона касания (::before) высотой 44 px и
+     вплотную к соседям — без «мёртвых» промежутков и без наложений */
+  .pn .k-swatches {
+    gap: 6px;
+  }
+  .pn .k-swatch {
+    width: 36px;
+    height: 36px;
+  }
+  .pn .k-swatch::before {
+    content: "";
+    position: absolute;
+    inset: -4px -3px;
+    border-radius: 22px;
+  }
+  /* Узкий телефон (360–375 px): восемь образцов всё ещё в один ряд */
+  @container pn (max-width: 363px) {
+    .pn .k-swatch {
+      width: 32px;
+      height: 32px;
+    }
+    .pn .k-swatch::before {
+      inset: -6px -3px;
+    }
+  }
 }

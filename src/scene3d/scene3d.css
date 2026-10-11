@@ -87,9 +87,11 @@
 .s3d-tbtn:active {
   background: var(--border);
 }
+/* Кольцо фокуса — как у всего приложения (base.css, контраст ≥ 3:1), но внутри
+   кнопки: снаружи оно налезло бы на соседние кнопки панели. */
 .s3d-tbtn:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
 }
 .s3d-tbtn.is-active {
   background: var(--primary-weak);
@@ -114,7 +116,13 @@
   }
 }
 
-/* Узко (телефон, «Оба»): всё иконками, кнопки крупнее — под палец. */
+/* Короткая подпись под иконкой — только на узком виде. */
+.s3d-tbtn__short {
+  display: none;
+}
+
+/* Узко (телефон, «Оба»): иконка и короткая подпись под ней (на тач-экране
+   title не всплывает — назначение кнопки должно читаться сразу), кнопки 44 px. */
 @container s3d (max-width: 560px) {
   .s3d-toolbar {
     bottom: 10px;
@@ -124,14 +132,24 @@
   .s3d-toolbar__caption {
     display: none;
   }
+  .s3d-tbtn__short {
+    display: block;
+    font-size: 10px;
+    font-weight: 550;
+    line-height: 1;
+  }
   .s3d-tbtn,
   .s3d-tbtn--mode,
   .s3d-tbtn--icon {
-    width: 38px;
-    height: 36px;
-    padding: 0;
+    flex-direction: column;
+    gap: 3px;
+    width: auto;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 5px;
   }
   .s3d-toolbar__sep {
+    height: 28px;
     margin: 0 3px;
   }
 }
@@ -139,7 +157,11 @@
   .s3d-tbtn,
   .s3d-tbtn--mode,
   .s3d-tbtn--icon {
-    width: 34px;
+    min-width: 38px;
+    padding: 0 3px;
+  }
+  .s3d-tbtn__short {
+    font-size: 9.5px;
   }
   .s3d-toolbar__sep {
     margin: 0 2px;
@@ -191,7 +213,7 @@
 }
 @container s3d (max-width: 560px) {
   .s3d-flash-host {
-    bottom: 58px;
+    bottom: 70px;
   }
   .s3d-flash--view {
     position: static;
@@ -272,6 +294,7 @@
   color: var(--text-3);
 }
 .s3d-hint__close {
+  position: relative;
   flex: none;
   display: grid;
   place-items: center;
@@ -286,13 +309,19 @@
     background var(--transition),
     color var(--transition);
 }
+/* Поле касания больше видимого кружка: 44 × 44. */
+.s3d-hint__close::after {
+  content: "";
+  position: absolute;
+  inset: -9px;
+}
 .s3d-hint__close:hover {
   background: var(--surface-3);
   color: var(--text);
 }
 .s3d-hint__close:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  outline: 2px solid var(--primary);
+  outline-offset: 0;
 }
 
 /* Маленький вид (телефон, «Оба»): главное в одну строку. */
@@ -398,6 +427,7 @@
   pointer-events: none;
   transition:
     opacity 160ms ease,
+    translate 140ms ease,
     background var(--transition),
     color var(--transition);
 }

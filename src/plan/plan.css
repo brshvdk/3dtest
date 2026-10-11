@@ -16,6 +16,14 @@
   isolation: isolate;
 }
 
+/* Фокус приходит на план после клика по нему (стрелки двигают выделенное). */
+.pl-root:focus {
+  outline: none;
+}
+.pl-root:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
 .pl-svg {
   position: absolute;
   inset: 0;
@@ -391,6 +399,37 @@ button.pl-chip {
   }
 }
 
+/* Ручки углов и проёмов для клавиатуры: видны только в фокусе, мышь проходит сквозь них к SVG. */
+.pl-keys {
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+.pl-key {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+}
+.pl-key--opening {
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  border-radius: 10px;
+}
+.pl-key:focus-visible {
+  opacity: 1;
+  /* Своё кольцо вместо общего outline (base.css), иначе колец два. */
+  outline: none;
+  box-shadow: 0 0 0 2.5px var(--primary), 0 0 0 6px var(--primary-weak);
+}
+
 /* ------------------------------ Оверлеи ------------------------------ */
 
 .pl-glass {
@@ -621,6 +660,10 @@ button.pl-chip {
   gap: 10px;
   min-width: 0;
 }
+/* Кнопки в строке не сжимаются — сжимается заголовок. */
+.pl-ctx__head > .k-btn {
+  flex: none;
+}
 .pl-ctx__badge,
 .pl-ctx__icon {
   flex: none;
@@ -683,6 +726,15 @@ button.pl-chip {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Подсказка в две строки, а не «Тяните, чтобы измени…». */
+.pl-ctx__sub--wrap {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  line-height: 1.3;
 }
 .pl-ctx__row {
   display: flex;
@@ -868,16 +920,91 @@ button.pl-chip {
 .pl-ctx.is-compact > .pl-ctx__note {
   margin-top: -4px;
 }
+/* Компактная панель рядом с объектом (небольшой план): шире, чтобы переключатели двери шли в одну строку. */
+.pl-ctx.is-compact:not(.is-docked) {
+  width: 352px;
+}
+.pl-ctx.is-compact .pl-ctx__head {
+  gap: 6px;
+}
+/* Стена и угол на небольшом плане — одна строка: буква, длина, «добавить» иконками. */
+.pl-ctx.is-bar.is-compact {
+  width: auto;
+  max-width: min(400px, calc(100% - 16px));
+  padding: 8px;
+}
+.pl-ctx.is-bar .pl-ctx__titles {
+  max-width: 132px;
+}
+.pl-ctx.is-bar .pl-ctx__head {
+  gap: 4px;
+}
+.pl-ctx.is-bar .pl-ctx__len {
+  width: 96px;
+  margin-left: 4px;
+}
+.pl-ctx.is-bar .pl-ctx__add svg {
+  color: var(--primary);
+}
+.pl-ctx__vsep {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin: 0 3px;
+  background: var(--border);
+}
+.pl-ctx.is-compact .pl-ctx__head > .pl-ctx__titles {
+  margin-left: 4px;
+}
+.pl-ctx.is-compact .pl-ctx__sub--skirt > span {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  min-width: 0;
+  overflow: hidden;
+}
+.pl-ctx.is-compact .pl-ctx__opts {
+  gap: 8px;
+}
 .pl-root.is-coarse .pl-chip {
   height: 28px;
 }
-/* Пальцем — крупнее кнопки и переключатели контекстной панели. */
+/* Пальцем — цели не меньше 40 px: кнопки и переключатели панели, масштаб, крестик подсказки, плашки стен. */
 .pl-root.is-coarse .pl-ctx .k-btn--sm {
-  --btn-h: 38px;
+  --btn-h: 40px;
 }
 .pl-root.is-coarse .pl-ctx .k-seg--sm > button {
-  height: 32px;
-  padding: 0 12px;
+  height: 40px;
+}
+.pl-root.is-coarse .pl-zoom .k-btn {
+  --btn-h: 40px;
+}
+.pl-root.is-coarse .pl-hint__close {
+  width: 40px;
+  height: 40px;
+  margin: -7px -4px -7px 0;
+}
+.pl-root.is-coarse .pl-chip--wall {
+  position: relative;
+}
+/* Зона касания плашки — до 40 px, но только в сторону от стены: тап у самой стены выделяет стену. */
+.pl-root.is-coarse .pl-chip--wall::before {
+  content: "";
+  position: absolute;
+  inset: -6px;
+}
+.pl-root.is-coarse .pl-chip--wall[data-out="up"]::before {
+  inset: -12px -6px 0;
+}
+.pl-root.is-coarse .pl-chip--wall[data-out="down"]::before {
+  inset: 0 -6px -12px;
+}
+.pl-root.is-coarse .pl-chip--wall[data-out="left"]::before {
+  inset: -6px 0 -6px -12px;
+}
+.pl-root.is-coarse .pl-chip--wall[data-out="right"]::before {
+  inset: -6px -12px -6px 0;
 }
 .pl-root.is-coarse .pl-chip--dim,
 .pl-root.is-coarse .pl-chip--angle {
@@ -917,6 +1044,15 @@ button.pl-chip {
 }
 .psvg .pl-furn__label {
   stroke: var(--psvg-halo);
+}
+/* «Стены: D · 1,50 м» — длины, не уместившиеся на размерных линиях. */
+.psvg-legend {
+  fill: var(--plan-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Печать и превью листа: светлая палитра независимо от темы, читаемо в ч/б. */

@@ -8,7 +8,7 @@
  * обновляется сразу, а итог — следом, в фоновой отрисовке. Тело панели
  * мемоизировано по смете, поэтому срочная отрисовка тут почти бесплатна.
  */
-import { memo, useDeferredValue } from "react";
+import { memo, useDeferredValue, useMemo } from "react";
 import type { ProductEstimate, ProjectEstimate } from "../domain/estimate";
 import { getColorName } from "../domain/skirtingCatalog";
 import type { Project, Room } from "../domain/types";
@@ -329,6 +329,8 @@ const ResultsBody = memo(function ResultsBody({
           (w) => !(/Весь периметр занят/.test(w) && [...emptyRooms].some((prefix) => w.startsWith(prefix))),
         );
   const skippedActive = products.length > 0 && activeRoom && !activeRoom.skirtingEnabled;
+  // Номера комнат в раскрое — те же, что на печатном листе (по порядку в проекте).
+  const roomNumbers = useMemo(() => new Map(project.rooms.map((r, i) => [r.id, i + 1])), [project.rooms]);
 
   return (
     <div className="rs-panel">
@@ -380,7 +382,7 @@ const ResultsBody = memo(function ResultsBody({
           actions={<Icon name="scissors" size={18} className="rs-section-icon" />}
           className="rs-cut-section"
         >
-          <CutPlan estimate={pe} />
+          <CutPlan estimate={pe} showRoomNames={estimate.rooms.length > 1} roomNumbers={roomNumbers} />
         </Section>
       ))}
 

@@ -20,6 +20,25 @@ const DEFAULT_DIGITS: Record<LengthUnit, number> = { m: 2, cm: 0, mm: 0 };
 
 const NBSP = " ";
 
+/**
+ * Форматтеры по (digits, trim): Intl.NumberFormat дорог в создании, а
+ * formatNumber зовут плашки, поля и строки сметы на каждом кадре перетаскивания.
+ */
+const FORMATTERS = new Map<string, Intl.NumberFormat>();
+
+function formatterFor(digits: number, trim: boolean): Intl.NumberFormat {
+  const key = `${digits}|${trim ? 1 : 0}`;
+  let f = FORMATTERS.get(key);
+  if (!f) {
+    f = new Intl.NumberFormat("ru-RU", {
+      minimumFractionDigits: trim ? 0 : digits,
+      maximumFractionDigits: digits,
+    });
+    FORMATTERS.set(key, f);
+  }
+  return f;
+}
+
 /** Число по-русски: «1 234,5». */
 export function formatNumber(
   v: number,
@@ -27,11 +46,8 @@ export function formatNumber(
   opts: { trim?: boolean } = {},
 ): string {
   if (!Number.isFinite(v)) return "—";
-  const s = v.toLocaleString("ru-RU", {
-    minimumFractionDigits: opts.trim ? 0 : digits,
-    maximumFractionDigits: digits,
-  });
-  return s.replace(/ /g, NBSP);
+  // ru-RU делит тысячи узким неразрывным пробелом (U+202F) — приводим к обычному NBSP.
+  return formatterFor(digits, !!opts.trim).format(v).replace(/\u202f/g, NBSP);
 }
 
 /** Метры → значение в единице. */

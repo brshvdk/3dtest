@@ -6,6 +6,8 @@ import {
   MATERIAL_META,
   SKIRTING_CATALOG,
   getCatalogProduct,
+  priceForLength,
+  pricePerMeter,
   getColorName,
   getProductLengths,
   hasOverride,
@@ -175,6 +177,19 @@ describe("resolveProduct", () => {
     // Каталог не изменился.
     expect(getCatalogProduct("pvc-55")!.price).toBe(200);
     expect(getCatalogProduct("pvc-55")!.prices.innerCorner).toBe(45);
+  });
+
+  it("цена планки без правки — по цене погонного метра выбранной длины", () => {
+    const base = getCatalogProduct("mdf-80")!;
+    expect(priceForLength(base, 2.4)).toBe(550);
+    expect(priceForLength(base, 2.8)).toBe(642); // 550 / 2,4 · 2,8
+    expect(priceForLength(base, 2.07)).toBe(474);
+    expect(resolveProduct("mdf-80", { "mdf-80": { length: 2.8 } }).price).toBe(642);
+    expect(resolveProduct("ceramic-80", { "ceramic-80": { length: 1.2 } }).price).toBe(500);
+    expect(resolveProduct("ceramic-80", { "ceramic-80": { length: 0.3 } }).price).toBe(125);
+    // Своя цена — именно за эту планку.
+    expect(resolveProduct("mdf-80", { "mdf-80": { length: 2.8, price: 600 } }).price).toBe(600);
+    expect(pricePerMeter(resolveProduct("mdf-80", { "mdf-80": { length: 2.8 } }))).toBeCloseTo(229.29, 2);
   });
 
   it("мусорные значения игнорируются", () => {

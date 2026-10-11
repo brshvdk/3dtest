@@ -3,8 +3,12 @@
  * края проёма (как видно изнутри), y — вверх от пола, z — в комнату
  * (стена занимает z ∈ [−толщина, 0]).
  */
+import { useRef } from "react";
+import { useFrame } from "@react-three/fiber";
+import type { Group } from "three";
 import { CASING_INSET, DOOR_FRAME } from "../../domain/openings";
 import type { Opening } from "../../domain/types";
+import { useScene } from "../context";
 import type { Palette } from "../materials";
 import { Box, HitBox } from "./Box";
 
@@ -45,7 +49,11 @@ function Handle({ x, y, z, side, dir, p }: { x: number; y: number; z: number; si
   );
 }
 
-/** Полотно с петлями на hingeX; открывается в сторону openSign (+1 — в комнату). */
+/**
+ * Полотно с петлями на hingeX; открывается в сторону openSign (+1 — в комнату).
+ * Снаружи (кукольный домик) приоткрыто — видно, куда открывается; когда камера
+ * в комнате (вид «От входа»), закрыто: приоткрытое полотно вблизи заслоняет кадр.
+ */
 function Leaf({
   hingeX,
   width,
@@ -76,8 +84,16 @@ function Leaf({
   const x1 = s > 0 ? width - 0.002 : -0.002;
   const hx = s > 0 ? width - 0.07 : -width + 0.07;
   const hy = Math.min(1.0, height * 0.48);
+  const { registry } = useScene();
+  const ref = useRef<Group>(null);
+  useFrame(({ camera }) => {
+    const g = ref.current;
+    if (!g) return;
+    const r = registry.isInside(camera.position) ? 0 : rot;
+    if (g.rotation.y !== r) g.rotation.y = r;
+  });
   return (
-    <group position={[hingeX, 0, z]} rotation={[0, rot, 0]}>
+    <group ref={ref} position={[hingeX, 0, z]} rotation={[0, rot, 0]}>
       <Box b={[x0, x1, 0.008, height, z0, z1]} m={p.wood} />
       <Handle x={hx} y={hy} z={z1} side={1} dir={(-s) as 1 | -1} p={p} />
       <Handle x={hx} y={hy} z={z0} side={-1} dir={(-s) as 1 | -1} p={p} />

@@ -2,7 +2,7 @@
  * Пол с процедурной раскладкой, «срез» перекрытия под стенами и мягкая
  * тень под моделью — комната выглядит как аккуратный макет.
  */
-import { useDeferredValue, useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useFrame, useThree } from "@react-three/fiber";
 import {
   BackSide,
@@ -20,6 +20,7 @@ import { useAppStore } from "../../state/store";
 import { MeshBuilder } from "../build/builder";
 import { buildFloorAO, buildFloorGeometry, getFloorTile, getSoftShadowCanvas } from "../build/floor";
 import { useScene } from "../context";
+import { useSettled } from "../settle";
 
 /** Толщина «перекрытия» под комнатой, м. */
 export const SLAB = 0.08;
@@ -61,8 +62,9 @@ export function Floor({ room }: { room: Room }) {
   }, [tile, gl]);
   useEffect(() => () => texture.dispose(), [texture]);
 
-  // Карта затенения пересчитывается с отложенными точками — не тормозит перетаскивание стен.
-  const aoPoints = useDeferredValue(room.points);
+  // Карта затенения — самый тяжёлый пересчёт сцены (≈10 мс): пока тянут стену,
+  // остаётся прежняя (растягивается по габариту пола), новая — после жеста.
+  const aoPoints = useSettled(room.points);
   const ao = useMemo(() => {
     const t = new CanvasTexture(buildFloorAO(aoPoints));
     t.channel = 1;

@@ -303,6 +303,24 @@ describe("плинтус и вид", () => {
     expect(S().project.productOverrides).toEqual({});
   });
 
+  it("длина планки: цена без правки следует за длиной, своя цена пересчитывается за метр", () => {
+    const product = () => getRoomProduct({ ...S().project, skirting: { ...S().project.skirting, productId: "mdf-80" } }, room());
+    // Без правки цены: 550 ₽ за 2,4 м → цена погонного метра для 2,8 м.
+    S().updateProductOverride("mdf-80", { length: 2.8 });
+    expect(S().project.productOverrides["mdf-80"]).toEqual({ length: 2.8 });
+    expect(product().price).toBe(Math.round((550 / 2.4) * 2.8));
+    // Своя цена 550 ₽ за 2,8 м — правка, хотя совпадает с каталожной ценой 2,4 м.
+    S().updateProductOverride("mdf-80", { price: 550 });
+    expect(S().project.productOverrides["mdf-80"]).toEqual({ length: 2.8, price: 550 });
+    expect(product().price).toBe(550);
+    // Смена длины сохраняет цену метра своей цены.
+    S().updateProductOverride("mdf-80", { length: 2.4 });
+    expect(S().project.productOverrides["mdf-80"]).toEqual({ price: Math.round((550 / 2.8) * 2.4) });
+    // Цена, совпавшая с ценой каталога для этой длины, — не правка.
+    S().updateProductOverride("mdf-80", { price: 550 });
+    expect(S().project.productOverrides["mdf-80"]).toBeUndefined();
+  });
+
   it("setDefaultProduct и настройки с ограничениями", () => {
     S().setDefaultProduct("mdf-80");
     expect(S().project.skirting.productId).toBe("mdf-80");

@@ -7,6 +7,7 @@
 import {
   Component,
   Fragment,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -43,18 +44,43 @@ import "./scene3d.css";
 
 /* ------------------------------ Сцена -------------------------------- */
 
-function SceneRoot({ theme }: { theme: SceneTheme }) {
+function SceneRoot({ theme, onContextLost }: { theme: SceneTheme; onContextLost: (lost: boolean) => void }) {
   const room = useActiveRoom();
   const walls = useWalls();
   const wallMode = useView3d((s) => s.wallMode);
   const labels = useView3d((s) => s.labels);
   const invalidate = useThree((s) => s.invalidate);
+  const gl = useThree((s) => s.gl);
+
+  // Потеря WebGL-контекста (сброс видеокарты, нехватка памяти): three сам просит
+  // браузер вернуть контекст. Вернул — перерисовать кадр (рендер по требованию)
+  // и заново построить окружение: его карта жила только в видеопамяти.
+  const [glGen, setGlGen] = useState(0);
+  useEffect(() => {
+    const el = gl.domElement;
+    const lost = () => onContextLost(true);
+    const restored = () => {
+      onContextLost(false);
+      setGlGen((g) => g + 1);
+      invalidate();
+    };
+    el.addEventListener("webglcontextlost", lost);
+    el.addEventListener("webglcontextrestored", restored);
+    return () => {
+      el.removeEventListener("webglcontextlost", lost);
+      el.removeEventListener("webglcontextrestored", restored);
+    };
+  }, [gl, invalidate, onContextLost]);
 
   const registry = useMemo(() => new SceneRegistry(), []);
   const clip = useMemo(() => createClipPlane(), []);
   const ctx = useMemo<SceneCtx>(() => ({ theme, clip, registry }), [theme, clip, registry]);
 
   const top = wallMode === "low" ? Math.min(LOW_WALL_HEIGHT, room.height) : room.height;
+  useLayoutEffect(() => {
+    registry.interior = { points: room.points, height: room.height };
+    invalidate();
+  }, [registry, room.points, room.height, invalidate]);
   useLayoutEffect(() => {
     clip.constant = wallMode === "low" ? top + 0.001 : NO_CLIP;
     invalidate();
@@ -63,7 +89,7 @@ function SceneRoot({ theme }: { theme: SceneTheme }) {
   return (
     <SceneContext.Provider value={ctx}>
       <color attach="background" args={[theme.bg]} />
-      <Environment intensity={theme.dark ? 0.42 : 0.5} />
+      <Environment key={glGen} intensity={theme.dark ? 0.42 : 0.5} />
       <Lights room={room} />
       <Floor room={room} />
       <Base room={room} />
@@ -81,10 +107,32 @@ function SceneRoot({ theme }: { theme: SceneTheme }) {
 
 /* ----------------------------- Оверлей -------------------------------- */
 
-const PRESETS: Array<{ id: CameraPreset; label: string; icon: "cube" | "plan" | "eye"; title: string; flash: string }> = [
-  { id: "persp", label: "Перспектива", icon: "cube", title: "Вся комната целиком", flash: "Перспектива — вся комната" },
-  { id: "top", label: "Сверху", icon: "plan", title: "Вид сверху, как на плане", flash: "Вид сверху" },
-  { id: "entry", label: "От входа", icon: "eye", title: "Как видно, если войти в комнату", flash: "Вид от входа" },
+/** short — подпись под иконкой на узком виде (телефон, «Оба»): без наведения назначение не узнать. */
+const PRESETS: Array<{
+  id: CameraPreset;
+  label: string;
+  short: string;
+  icon: "cube" | "plan" | "eye";
+  title: string;
+  flash: string;
+}> = [
+  {
+    id: "persp",
+    label: "Перспектива",
+    short: "Обзор",
+    icon: "cube",
+    title: "Вся комната целиком",
+    flash: "Перспектива — вся комната",
+  },
+  { id: "top", label: "Сверху", short: "Сверху", icon: "plan", title: "Вид сверху, как на плане", flash: "Вид сверху" },
+  {
+    id: "entry",
+    label: "От входа",
+    short: "Вход",
+    icon: "eye",
+    title: "Как видно, если войти в комнату",
+    flash: "Вид от входа",
+  },
 ];
 
 const WALL_MODES: Array<{
@@ -149,6 +197,7 @@ function Toolbar() {
           >
             <Icon name={p.icon} size={17} />
             <span className="s3d-tbtn__text">{p.label}</span>
+            <span className="s3d-tbtn__short">{p.short}</span>
           </button>
         ))}
       </div>
@@ -170,6 +219,7 @@ function Toolbar() {
           >
             <Icon name={m.icon} size={17} />
             <span className="s3d-tbtn__text s3d-tbtn__text--mode">{m.label}</span>
+            <span className="s3d-tbtn__short">{m.label}</span>
           </button>
         ))}
       </div>
@@ -183,6 +233,7 @@ function Toolbar() {
         title={labels ? "Скрыть подписи стен" : "Показать подписи стен"}
       >
         <Icon name="tag" size={17} />
+        <span className="s3d-tbtn__short">Подписи</span>
       </button>
     </div>
   );
@@ -381,11 +432,25 @@ class SceneBoundary extends Component<{ children: ReactNode }, { error: boolean;
 
 /* ------------------------------ Корень -------------------------------- */
 
+/** Сколько ждём, пока браузер вернёт потерянный WebGL-контекст, мс. */
+const CONTEXT_WAIT = 3000;
+
 export default function Scene3D() {
   const theme = useSceneTheme();
   const supported = useMemo(webglAvailable, []);
   const tipRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+
+  // Контекст потерян и не вернулся — предлагаем пересоздать холст (новый key).
+  const [contextLost, setContextLost] = useState(false);
+  const [canvasKey, setCanvasKey] = useState(0);
+  const lostTimer = useRef(0);
+  const onContextLost = useCallback((lost: boolean) => {
+    window.clearTimeout(lostTimer.current);
+    if (lost) lostTimer.current = window.setTimeout(() => setContextLost(true), CONTEXT_WAIT);
+    else setContextLost(false);
+  }, []);
+  useEffect(() => () => window.clearTimeout(lostTimer.current), []);
 
   // Уход курсора со сцены — убрать подсказку и подсветку участка.
   useEffect(() => {
@@ -445,10 +510,25 @@ export default function Scene3D() {
     );
   }
 
+  if (contextLost) {
+    return (
+      <div className="s3d">
+        <Fallback
+          text="Видеокарта сбросила 3D-вид и не вернула его. Расчёт и план работают как обычно."
+          onRetry={() => {
+            setContextLost(false);
+            setCanvasKey((k) => k + 1);
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="s3d" ref={rootRef} onPointerDown={onPointerDown} onPointerMove={onPointerMove}>
       <SceneBoundary>
         <Canvas
+          key={canvasKey}
           className="s3d__canvas"
           frameloop="demand"
           shadows
@@ -466,7 +546,7 @@ export default function Scene3D() {
           }}
           aria-label="3D-вид комнаты"
         >
-          <SceneRoot theme={theme} />
+          <SceneRoot theme={theme} onContextLost={onContextLost} />
         </Canvas>
       </SceneBoundary>
       <TopStack>

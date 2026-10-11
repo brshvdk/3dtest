@@ -20,7 +20,7 @@ import { getEstimate, getRoomMetrics } from "../state/hooks";
 import { useAppStore } from "../state/store";
 import { Icon } from "../ui/kit";
 import { USEFUL_OFFCUT, growOf } from "./CutPlan";
-import { countText, formatDateRu, joinRu, meters, partText, pctText, shortLen, splitPieceLabel, stockText, unitForms } from "./format";
+import { countText, formatDateRu, joinRu, meters, pctText, pieceText, shortLen, splitPieceLabel, stockText, unitForms, wasteLen } from "./format";
 import "./results.css";
 
 /* ------------------------------- Итог -------------------------------- */
@@ -175,25 +175,27 @@ function RoomBlock({ room, result, no }: { room: Room; result: RoomSkirtingResul
 /** Номер комнаты (в порядке проекта) — для ч/б печати, где цвета комнат не видны. */
 type RoomNo = (roomId: string) => number | null;
 
-const pieceName = (label: string): string => {
-  const { main, part, reveal } = splitPieceLabel(label);
-  return `${reveal ? "откос " : ""}${main}${part ? ` ${partText(part)}` : ""}`;
-};
-
 function SheetBar({ bar, no, stock, roomNo }: { bar: CutBar; no: number; stock: number; roomNo: RoomNo }) {
   return (
     <div className="rs-sheet__bar-row">
       <span className="rs-sheet__bar-no">{no}</span>
       <div className="rs-sheet__bar">
         {bar.pieces.map((p) => {
-          const { main } = splitPieceLabel(p.label);
+          const { main, part, reveal } = splitPieceLabel(p.label);
           const rn = roomNo(p.roomId);
           const mark = rn !== null ? <span className="rs-sheet__rno">{rn}</span> : null;
           return (
             <span key={p.id} className="rs-sheet__pc" style={{ flexGrow: growOf(p.length) }}>
               <span className="rs-sheet__t-long">
                 {mark}
-                {pieceName(p.label)} · {shortLen(p.length)}
+                {pieceText(p.label)} · {shortLen(p.length)}
+              </span>
+              {/* Средний кусок: «A 1/2 · 1,45» — короче «кусок 1 из 2», а дробь с участком «A2» не спутать. */}
+              <span className="rs-sheet__t-mid">
+                {mark}
+                {reveal ? "откос " : ""}
+                {main}
+                {part ? ` ${part}` : ""} · {shortLen(p.length)}
               </span>
               <span className="rs-sheet__t-short">
                 {mark}
@@ -205,7 +207,7 @@ function SheetBar({ bar, no, stock, roomNo }: { bar: CutBar; no: number; stock: 
         {bar.waste > stock * 0.004 ? (
           <span className="rs-sheet__waste" style={{ flexGrow: growOf(bar.waste) }}>
             <span className="rs-sheet__t-long">
-              {shortLen(bar.waste)}
+              {wasteLen(bar.waste)}
               {bar.waste >= USEFUL_OFFCUT - 1e-9 ? " ✓" : ""}
             </span>
           </span>
@@ -227,7 +229,7 @@ function SheetCut({ pe, title, roomNo }: { pe: ProductEstimate; title: string | 
   const fullByRoom = pe.rooms
     .map((r) => ({
       room: r,
-      names: full.filter(({ bar }) => bar.pieces[0].roomId === r.roomId).map(({ bar }) => pieceName(bar.pieces[0].label)),
+      names: full.filter(({ bar }) => bar.pieces[0].roomId === r.roomId).map(({ bar }) => pieceText(bar.pieces[0].label)),
     }))
     .filter((g) => g.names.length > 0);
   return (
@@ -249,7 +251,7 @@ function SheetCut({ pe, title, roomNo }: { pe: ProductEstimate; title: string | 
                   {g.room.roomName} — {g.names.join(", ")}
                 </span>
               ))
-            : full.map(({ bar }) => pieceName(bar.pieces[0].label)).join(", ")}
+            : full.map(({ bar }) => pieceText(bar.pieces[0].label)).join(", ")}
         </p>
       ) : null}
       <div className="rs-sheet__bars">

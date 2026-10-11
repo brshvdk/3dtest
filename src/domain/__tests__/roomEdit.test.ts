@@ -438,6 +438,25 @@ describe("addOpening", () => {
     expect(o.presetId).toBeNull();
   });
 
+  it("мебель по умолчанию — в углу, а не посреди стены", () => {
+    const room = mk([[0, 0], [5, 0], [5, 3], [0, 3]]);
+    const r = addOpening(room, "furniture");
+    const o = r.room.openings[0];
+    const wall = getWalls(r.room).find((w) => w.id === o.wallId)!;
+    expect(o.width).toBeCloseTo(2.4);
+    expect(o.offset === 0 || Math.abs(o.offset + o.width - wall.length) < 1e-9).toBe(true);
+  });
+
+  it("мебель не встаёт в угол, где боковина перекроет дверь соседней стены", () => {
+    // Дверь на стене D (p3: (0,3)→(0,0)) у самого угла D/A: левый угол A занят.
+    const d: Opening = { ...createOpening("door", "p3", 2.05), id: "d" };
+    const room = mk([[0, 0], [5, 0], [5, 3], [0, 3]], [d]);
+    const r = addOpening(room, "furniture", { presetId: "furn-closet" });
+    const o = r.room.openings.find((x) => x.id === r.openingId)!;
+    expect(o.wallId).toBe("p0");
+    expect(o.offset + o.width).toBeCloseTo(5); // правый угол A/B свободен
+  });
+
   it("нет места нигде — null и исходная комната", () => {
     const room = mk([[0, 0], [1.2, 0], [1.2, 1], [0, 1]]);
     const r = addOpening(room, "balcony");
@@ -543,5 +562,32 @@ describe("applyTemplate", () => {
   it("custom — без изменений", () => {
     const room = mk(RECT);
     expect(applyTemplate(room, "custom")).toBe(room);
+  });
+
+  it("проём, не поместившийся на прежнее место, встаёт по центру стены, а не к углу", () => {
+    // Дверь 80 в 2,5 м от начала стены C (4 м) → у Г-образной C = 2 м (выступ выреза).
+    const room = mk(RECT, [door("p2", 2.5)]);
+    const r = applyTemplate(room, "L");
+    const o = r.openings[0];
+    const wall = getWalls(r).find((w) => w.id === o.wallId)!;
+    expect(wall.index).toBe(2);
+    expect(wall.length).toBeCloseTo(2);
+    expect(o.offset).toBeCloseTo((2 - o.width) / 2, 6);
+    // Наличник целиком на стене, с запасом от угла.
+    const fp = footprint(o);
+    expect(fp.from).toBeGreaterThan(0.05);
+    expect(wall.length - fp.to).toBeGreaterThan(0.05);
+  });
+
+  it("то же число стен: зажатый проём переставляется в свободное место, а не к краю", () => {
+    const room = mk(RECT, [{ ...door("p0", 3), id: "d" }]);
+    // Трапеция с верхней стороной 2 м: дверь в 3 м не помещается.
+    const r = applyTemplate(room, "trapezoid", { lengthTop: 2, lengthBottom: 4, width: 3 });
+    const o = r.openings[0];
+    const wall = getWalls(r).find((w) => w.id === o.wallId)!;
+    const fp = footprint(o);
+    expect(fp.from).toBeGreaterThanOrEqual(0);
+    expect(fp.to).toBeLessThanOrEqual(wall.length + 1e-9);
+    expect(o.offset).toBeCloseTo((wall.length - o.width) / 2, 6);
   });
 });

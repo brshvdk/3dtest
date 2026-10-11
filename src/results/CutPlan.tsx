@@ -18,19 +18,23 @@ import {
   NBSP,
   countText,
   describePiece,
+  isMinimalCut,
   meters,
   numberRanges,
   partText,
   pctText,
   shortLen,
+  wasteLen,
   splitPieceLabel,
   stockText,
   unitForms,
+  unitWords,
+  type SplitWalls,
 } from "./format";
 
 /** м: обрезок от этой длины «пригодится» (подойдёт на короткий участок). */
 export const USEFUL_OFFCUT = 0.3;
-/** Сколько оттенков для комнат (дальше — по кругу). */
+/** Сколько оттенков для комнат (дальше — по кругу, а куски помечаются номером комнаты). */
 const ROOM_TINTS = 8;
 
 /**
@@ -51,12 +55,26 @@ interface SegmentInfo {
   roomName: string;
 }
 
+/** Номер комнаты (как на печатном листе) — когда оттенков на все комнаты не хватает. */
+export type RoomNumbers = ReadonlyMap<string, number>;
+
+/** Что кусок берёт от своей комнаты: оттенок, номер и название, участки её стен. Один объект на комнату. */
+interface RoomCtx {
+  tint: number | null;
+  /** Номер в рамке — только если оттенки повторяются (комнат больше ROOM_TINTS). */
+  no: number | null;
+  /** Название — в подсказках, если в проекте больше одной комнаты. */
+  name: string | null;
+  /** Стены, разбитые проёмами на участки («A», «A2»). */
+  split: SplitWalls;
+}
+
 interface PlanData {
   fullBars: CutBar[];
   cutBars: CutBar[];
   /** Номер (с 1) каждой планки по ссылке. */
   barNo: Map<CutBar, number>;
-  roomTint: Map<string, number>;
+  rooms: Map<string, RoomCtx>;
   bySegment: Map<string, PieceRef[]>;
   segments: Map<string, SegmentInfo>;
   usefulOffcuts: number;
@@ -65,7 +83,7 @@ interface PlanData {
   unit: string;
 }
 
-function buildData(pe: ProductEstimate): PlanData {
+function buildData(pe: ProductEstimate, showRoomNames: boolean, roomNumbers: RoomNumbers | undefined): PlanData {
   const { bars } = pe.cutPlan;
   const fullBars: CutBar[] = [];
   const cutBars: CutBar[] = [];
@@ -84,20 +102,46 @@ function buildData(pe: ProductEstimate): PlanData {
     }
   });
   const segments = new Map<string, SegmentInfo>();
-  for (const r of pe.rooms) for (const s of r.segments) segments.set(s.id, { segment: s, roomName: r.roomName });
-  const roomTint = new Map(pe.roomIds.map((id, i) => [id, i % ROOM_TINTS]));
+  const rooms = new Map<string, RoomCtx>();
+  const multiRoom = pe.roomIds.length > 1;
+  const numbered = pe.roomIds.length > ROOM_TINTS;
+  pe.rooms.forEach((r, i) => {
+    const split = new Set<string>();
+    for (const s of r.segments) {
+      segments.set(s.id, { segment: s, roomName: r.roomName });
+      if (!s.isReveal && s.label !== s.wallLabel) split.add(s.wallLabel);
+    }
+    rooms.set(r.roomId, {
+      tint: multiRoom ? i % ROOM_TINTS : null,
+      no: numbered ? roomNumbers?.get(r.roomId) ?? i + 1 : null,
+      name: multiRoom || showRoomNames ? r.roomName : null,
+      split,
+    });
+  });
   return {
     fullBars,
     cutBars,
     barNo,
-    roomTint,
+    rooms,
     bySegment,
     segments,
     usefulOffcuts: bars.filter((b) => b.waste >= USEFUL_OFFCUT - 1e-9).length,
-    multiRoom: pe.roomIds.length > 1,
+    multiRoom,
     unit: capitalize(unitForms(pe.product)[0]),
   };
 }
+
+const NO_ROOM: RoomCtx = { tint: null, no: null, name: null, split: new Set() };
+const roomOf = (data: PlanData, p: Piece): RoomCtx => data.rooms.get(p.roomId) ?? NO_ROOM;
+
+/** «Ванная, стена A, участок 1, кусок 2 из 2» */
+const pieceWhere = (piece: Piece, room: RoomCtx): string =>
+  `${room.name ? `${room.name}, ` : ""}${describePiece(piece.label, room.split)}`;
+
+const tintClass = (room: RoomCtx): string => (room.tint !== null ? ` rs-tint-${room.tint}` : "");
+
+/** Номер комнаты в рамке (как на печати) — когда оттенков на все комнаты не хватает. */
+const RoomMark = ({ no }: { no: number | null }) => (no !== null ? <span className="rs-rno">{no}</span> : null);
 
 const capitalize = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);
 
@@ -146,35 +190,40 @@ function pieceHandlers(piece: Piece) {
 
 const PieceBlock = memo(function PieceBlock({
   piece,
-  tint,
+  room,
   bar,
   unit,
-  roomName,
 }: {
   piece: Piece;
-  tint: number | null;
+  room: RoomCtx;
   bar: number;
   unit: string;
-  roomName: string | null;
 }) {
   const hot = useHotPiece(piece);
   const { main, part, reveal } = splitPieceLabel(piece.label);
   const handlers = useMemo(() => pieceHandlers(piece), [piece]);
-  const where = `${roomName ? `${roomName}, ` : ""}${describePiece(piece.label)}`;
+  const where = pieceWhere(piece, room);
   return (
     <button
       type="button"
-      className={`rs-pc${tint !== null ? ` rs-tint-${tint}` : ""}${hot ? " is-hot" : ""}`}
+      className={`rs-pc${tintClass(room)}${hot ? " is-hot" : ""}`}
       style={{ flexGrow: growOf(piece.length) }}
       aria-label={`${unit} ${bar}: ${where} — ${meters(piece.length)}`}
       title={`${where} — ${meters(piece.length)}`}
       {...handlers}
     >
       <span className="rs-pc__label">
+        <RoomMark no={room.no} />
         {reveal ? "откос " : ""}
         {main}
-        {/* На узком куске номер части прячется (CSS): «B» и длины достаточно, подробности — в подсказке. */}
-        {part ? <small className="rs-pc__part"> {partText(part)}</small> : null}
+        {/* «кусок 1 из 2» — чтобы половину участка A не спутать с участком A2. На узком куске —
+            «1/2», на совсем узком часть прячется (CSS): подробности — в подсказке. */}
+        {part ? (
+          <small className="rs-pc__part">
+            <span className="rs-pc__part-long"> кусок {partText(part)}</span>
+            <span className="rs-pc__part-short"> {part}</span>
+          </small>
+        ) : null}
       </span>
       <span className="rs-pc__len">{shortLen(piece.length)}</span>
     </button>
@@ -183,33 +232,32 @@ const PieceBlock = memo(function PieceBlock({
 
 const PieceChip = memo(function PieceChip({
   piece,
-  tint,
+  room,
   bar,
   unit,
-  roomName,
 }: {
   piece: Piece;
-  tint: number | null;
+  room: RoomCtx;
   bar: number;
   unit: string;
-  roomName: string | null;
 }) {
   const hot = useHotPiece(piece);
   const { main, part, reveal } = splitPieceLabel(piece.label);
   const handlers = useMemo(() => pieceHandlers(piece), [piece]);
-  const where = `${roomName ? `${roomName}, ` : ""}${describePiece(piece.label)}`;
+  const where = pieceWhere(piece, room);
   return (
     <button
       type="button"
-      className={`rs-chip${tint !== null ? ` rs-tint-${tint}` : ""}${hot ? " is-hot" : ""}`}
+      className={`rs-chip${tintClass(room)}${hot ? " is-hot" : ""}`}
       aria-label={`${unit} ${bar} целиком: ${where}`}
       title={`${unit} ${bar} целиком — ${where}`}
       {...handlers}
     >
       <span>
+        <RoomMark no={room.no} />
         {reveal ? "откос " : ""}
         {main}
-        {part ? <small> {partText(part)}</small> : null}
+        {part ? <small> кусок {partText(part)}</small> : null}
       </span>
     </button>
   );
@@ -229,8 +277,6 @@ const BarRow = memo(function BarRow({
   stock: number;
 }) {
   const useful = bar.waste >= USEFUL_OFFCUT - 1e-9;
-  const roomName = (p: Piece) => (data.multiRoom ? data.segments.get(p.segmentIds[0])?.roomName ?? null : null);
-  const tint = (p: Piece) => (data.multiRoom ? data.roomTint.get(p.roomId) ?? 0 : null);
   return (
     <li className="rs-bar-row">
       <span className="rs-bar-row__no" aria-hidden>
@@ -238,17 +284,17 @@ const BarRow = memo(function BarRow({
       </span>
       <div className="rs-bar" role="group" aria-label={`${data.unit} ${no}`}>
         {bar.pieces.map((p) => (
-          <PieceBlock key={p.id} piece={p} tint={tint(p)} bar={no} unit={data.unit} roomName={roomName(p)} />
+          <PieceBlock key={p.id} piece={p} room={roomOf(data, p)} bar={no} unit={data.unit} />
         ))}
         {bar.waste > stock * 0.004 ? (
           <span
             className={`rs-waste${useful ? " is-useful" : ""}`}
             style={{ flexGrow: growOf(bar.waste) }}
-            title={`Обрезок ${meters(bar.waste)}${useful ? " — пригодится" : ""}`}
+            title={`Обрезок ${wasteLen(bar.waste)}${NBSP}м${useful ? " — пригодится" : ""}`}
           >
             <span className="rs-waste__len">
               {useful ? <Icon name="check" size={12} strokeWidth={2.4} /> : null}
-              {shortLen(bar.waste)}
+              {wasteLen(bar.waste)}
             </span>
             {useful ? <span className="rs-waste__tag">пригодится</span> : null}
           </span>
@@ -260,14 +306,15 @@ const BarRow = memo(function BarRow({
 
 /* --------------------------- Подсказка снизу --------------------------- */
 
-function segmentName(s: SkirtingSegment): string {
+function segmentName(s: SkirtingSegment, split: SplitWalls): string {
   if (s.isReveal) return `откос у стены ${s.wallLabel}`;
-  if (s.label === s.wallLabel) return `стена ${s.wallLabel}`;
+  if (s.label === s.wallLabel) return split.has(s.wallLabel) ? `стена ${s.wallLabel}, участок 1` : `стена ${s.wallLabel}`;
   return `стена ${s.wallLabel}, участок ${s.label.slice(s.wallLabel.length)}`;
 }
 
 const HoverInfo = memo(function HoverInfo({ data }: { data: PlanData }) {
   const hoverId = useAppStore((s) => s.hoverSegmentId);
+  const activeRoomId = useAppStore((s) => s.activeRoomId);
   const touch = useMediaQuery("(hover: none)");
   const info = hoverId ? data.segments.get(hoverId) : undefined;
   const refs = hoverId ? data.bySegment.get(hoverId) : undefined;
@@ -280,9 +327,12 @@ const HoverInfo = memo(function HoverInfo({ data }: { data: PlanData }) {
     );
   }
   const s = info.segment;
+  const room = data.rooms.get(s.roomId) ?? NO_ROOM;
   const parts = refs.map((r) => `${shortLen(r.piece.length)}${NBSP}м (${data.unit.toLowerCase()}${NBSP}${r.bar})`);
-  const name = segmentName(s);
-  const head = `${data.multiRoom ? `${info.roomName} · ` : ""}${name[0].toUpperCase()}${name.slice(1)} · ${meters(s.length)}`;
+  const name = segmentName(s, room.split);
+  const head = `${room.name ? `${room.name} · ` : ""}${name[0].toUpperCase()}${name.slice(1)} · ${meters(s.length)}`;
+  // На плане и в 3D — активная комната: участок другой комнаты там не подсветится, пока её не открыть.
+  const elsewhere = s.roomId !== activeRoomId;
   return (
     <p className="rs-cut__hint is-active" aria-live="polite">
       <Icon name="skirting" size={14} />
@@ -291,6 +341,11 @@ const HoverInfo = memo(function HoverInfo({ data }: { data: PlanData }) {
         {refs.length === 1
           ? ` — кусок ${parts[0]}`
           : ` — ${refs.length} ${pluralize(refs.length, ["кусок", "куска", "кусков"])}: ${parts.join(" + ")}`}
+        {elsewhere ? (
+          <span className="rs-cut__elsewhere">
+            Эта комната сейчас не на плане — нажмите на кусок, чтобы открыть комнату «{info.roomName}».
+          </span>
+        ) : null}
       </span>
     </p>
   );
@@ -302,11 +357,22 @@ const HoverInfo = memo(function HoverInfo({ data }: { data: PlanData }) {
 const COLLAPSE_AFTER = 12;
 const COLLAPSED_ROWS = 8;
 
-export const CutPlan = memo(function CutPlan({ estimate }: { estimate: ProductEstimate }) {
-  const data = useMemo(() => buildData(estimate), [estimate]);
+export const CutPlan = memo(function CutPlan({
+  estimate,
+  showRoomNames = false,
+  roomNumbers,
+}: {
+  estimate: ProductEstimate;
+  /** В проекте есть и другие комнаты — называть комнату в подсказках, даже если у этого плинтуса она одна. */
+  showRoomNames?: boolean;
+  /** Номера комнат как на печатном листе (для пометок на кусках, когда комнат больше, чем оттенков). */
+  roomNumbers?: RoomNumbers;
+}) {
+  const data = useMemo(() => buildData(estimate, showRoomNames, roomNumbers), [estimate, showRoomNames, roomNumbers]);
   const [expanded, setExpanded] = useState(false);
   const { cutPlan, product } = estimate;
-  const forms = unitForms(product);
+  const words = unitWords(product);
+  const forms = words.forms;
   const eff = Math.round(cutPlan.efficiency * 100);
   const L = cutPlan.stockLength;
   const collapsible = data.cutBars.length > COLLAPSE_AFTER;
@@ -319,8 +385,7 @@ export const CutPlan = memo(function CutPlan({ estimate }: { estimate: ProductEs
     return <p className="rs-empty-line">Резать нечего — плинтус в этих комнатах не нужен.</p>;
   }
 
-  const tintOf = (p: Piece) => (data.multiRoom ? data.roomTint.get(p.roomId) ?? 0 : null);
-  const roomOf = (p: Piece) => (data.multiRoom ? data.segments.get(p.segmentIds[0])?.roomName ?? null : null);
+  const optimal = isMinimalCut(cutPlan);
 
   return (
     <div className="rs-cut">
@@ -329,14 +394,14 @@ export const CutPlan = memo(function CutPlan({ estimate }: { estimate: ProductEs
           {countText(cutPlan.bars.length, forms)} по {stockText(L)}
         </span>
         <Badge
-          tone={cutPlan.optimal ? "success" : eff >= 80 ? "primary" : "neutral"}
+          tone={optimal ? "success" : eff >= 80 ? "primary" : "neutral"}
           title={
-            cutPlan.optimal
-              ? "Доля плинтуса в купленных планках. Меньше планок не получится — раскрой оптимален."
-              : "Доля плинтуса в купленных планках, остальное — обрезки и пропилы."
+            optimal
+              ? `Доля плинтуса в купленных ${words.prepPl}. Меньше ${words.genPl} не получится — раскрой оптимален.`
+              : `Доля плинтуса в купленных ${words.prepPl}, остальное — обрезки и пропилы.`
           }
         >
-          {cutPlan.optimal ? <Icon name="check" size={12} strokeWidth={2.4} /> : null}
+          {optimal ? <Icon name="check" size={12} strokeWidth={2.4} /> : null}
           {pctText(eff, 0)} в дело
         </Badge>
       </div>
@@ -354,14 +419,7 @@ export const CutPlan = memo(function CutPlan({ estimate }: { estimate: ProductEs
           <div className="rs-chips">
             {data.fullBars.map((b) => {
               const p = b.pieces[0];
-              return <PieceChip
-                  key={p.id}
-                  piece={p}
-                  tint={tintOf(p)}
-                  bar={data.barNo.get(b) ?? 0}
-                  unit={data.unit}
-                  roomName={roomOf(p)}
-                />;
+              return <PieceChip key={p.id} piece={p} room={roomOf(data, p)} bar={data.barNo.get(b) ?? 0} unit={data.unit} />;
             })}
           </div>
         </div>
@@ -402,11 +460,18 @@ export const CutPlan = memo(function CutPlan({ estimate }: { estimate: ProductEs
           <i className="rs-legend__sw rs-legend__sw--useful" /> пригодится (от {formatNumber(USEFUL_OFFCUT * 100, 0)} см)
         </span>
         {data.multiRoom
-          ? estimate.rooms.map((r) => (
-              <span key={r.roomId} className="rs-legend__item">
-                <i className={`rs-legend__sw rs-legend__sw--room rs-tint-${data.roomTint.get(r.roomId) ?? 0}`} /> {r.roomName}
-              </span>
-            ))
+          ? estimate.rooms.map((r) => {
+              const room = data.rooms.get(r.roomId) ?? NO_ROOM;
+              return (
+                <span key={r.roomId} className="rs-legend__item">
+                  <i className={`rs-legend__sw rs-legend__sw--room${tintClass(room)}`} />
+                  <span>
+                    <RoomMark no={room.no} />
+                    {r.roomName}
+                  </span>
+                </span>
+              );
+            })
           : null}
       </div>
 

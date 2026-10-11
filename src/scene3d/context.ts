@@ -5,6 +5,8 @@
  */
 import { createContext, useContext } from "react";
 import { Mesh, Plane, Vector3, type Object3D } from "three";
+import { pointInPolygon } from "../domain/geometry";
+import type { Vec2 } from "../domain/types";
 import type { SceneTheme } from "./theme";
 
 export interface WallEntry {
@@ -40,6 +42,14 @@ export class SceneRegistry {
   hidden = new Set<string>();
   /** Реестр изменился — пересчитать видимость в ближайшем кадре. */
   dirty = true;
+  /** Контур пола и высота потолка активной комнаты. */
+  interior: { points: Vec2[]; height: number } | null = null;
+
+  /** Точка (обычно камера) внутри комнаты — вид «От входа» и облёт изнутри. */
+  isInside(p: { x: number; y: number; z: number }): boolean {
+    const r = this.interior;
+    return !!r && p.y < r.height && pointInPolygon({ x: p.x, y: p.z }, r.points);
+  }
 
   setWall(id: string, entry: WallEntry): void {
     this.walls.set(id, entry);

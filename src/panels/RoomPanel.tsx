@@ -3,12 +3,13 @@
  * толщина стен, сводка (площадь, периметр, объём, площадь стен).
  * Все правки — через стор; поля длины синхронны с перетаскиванием на плане.
  */
-import { memo, useCallback, useId, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useRef, type PointerEvent } from "react";
 import { ROOM_HEIGHT_RANGE, WALL_THICKNESS_RANGE } from "../domain/project";
 import { MIN_WALL } from "../domain/roomEdit";
 import { ROOM_NAME_SUGGESTIONS, ROOM_TEMPLATES, buildTemplatePoints } from "../domain/roomTemplates";
 import type { Point, Room, RoomShapeId, Wall } from "../domain/types";
 import { formatArea, formatLength, formatVolume, plural } from "../domain/units";
+import { usePlanUi } from "../plan/planUi";
 import { useActiveRoom, useRoomMetrics, useWalls } from "../state/hooks";
 import { useAppStore, type Selection } from "../state/store";
 import {
@@ -260,35 +261,48 @@ const ShapeSection = memo(function ShapeSection({
 /* ---------------------------- Размеры ----------------------------- */
 
 /**
- * Наведение на поле стены подсвечивает её на плане (временное выделение,
- * при уходе возвращается прежнее); фокус выделяет стену насовсем.
+ * Наведение мышью на поле стены подсвечивает её на плане так же, как наведение
+ * на сам план: выделение и вид не меняются (иначе план сдвигается к стене, а
+ * Delete и стрелки получают случайную цель). Фокус выделяет стену насовсем.
  */
 function useWallHighlight(roomId: string) {
-  const prev = useRef<{ sel: Selection; wallId: string } | null>(null);
-  return useMemo(() => {
+  /** Стена, подсвеченная отсюда, — снять подсветку, если панель закроют, пока указатель над строкой. */
+  const hovered = useRef<string | null>(null);
+  const hl = useMemo(() => {
     const isSelected = (s: Selection, wallId: string) => s?.type === "wall" && s.wallId === wallId;
+    // Касание тоже присылает pointerenter, а pointerleave — только при следующем касании:
+    // подсветка «залипла» бы; на сенсорном экране стену выделяет фокус поля.
+    const isMouse = (e: PointerEvent) => e.pointerType !== "touch";
+    const clear = (wallId: string) => {
+      if (hovered.current !== wallId) return;
+      hovered.current = null;
+      const u = usePlanUi.getState();
+      if (u.hover?.type === "wall" && u.hover.id === wallId) u.setHover(null, u.inRoom);
+    };
     return {
-      enter(wallId: string) {
-        const s = useAppStore.getState();
-        if (isSelected(s.selection, wallId)) return;
-        if (!prev.current) prev.current = { sel: s.selection, wallId };
-        else prev.current.wallId = wallId;
-        s.select({ type: "wall", roomId, wallId });
+      enter(wallId: string, e: PointerEvent) {
+        if (!isMouse(e)) return;
+        hovered.current = wallId;
+        const u = usePlanUi.getState();
+        u.setHover({ type: "wall", id: wallId }, u.inRoom);
       },
-      leave(wallId: string, el: HTMLElement) {
-        const p = prev.current;
-        if (!p || el.contains(document.activeElement)) return;
-        prev.current = null;
-        const s = useAppStore.getState();
-        if (isSelected(s.selection, wallId)) s.select(p.sel);
+      leave(wallId: string, e: PointerEvent) {
+        if (isMouse(e)) clear(wallId);
       },
       focus(wallId: string) {
-        prev.current = null;
         const s = useAppStore.getState();
         if (!isSelected(s.selection, wallId)) s.select({ type: "wall", roomId, wallId });
       },
+      clear,
     };
   }, [roomId]);
+  useEffect(
+    () => () => {
+      if (hovered.current) hl.clear(hovered.current);
+    },
+    [hl],
+  );
+  return hl;
 }
 
 type WallHighlight = ReturnType<typeof useWallHighlight>;
@@ -380,8 +394,8 @@ const WallField = memo(function WallField({
   return (
     <div
       className={`pn-wallfield${selected ? " is-selected" : ""}`}
-      onMouseEnter={() => hl.enter(wall.id)}
-      onMouseLeave={(e) => hl.leave(wall.id, e.currentTarget)}
+      onPointerEnter={(e) => hl.enter(wall.id, e)}
+      onPointerLeave={(e) => hl.leave(wall.id, e)}
       onFocus={() => hl.focus(wall.id)}
     >
       <LengthField
@@ -408,8 +422,8 @@ const WallRow = memo(function WallRow({
   return (
     <div
       className={`pn-wallrow${selected ? " is-selected" : ""}`}
-      onMouseEnter={() => hl.enter(wall.id)}
-      onMouseLeave={(e) => hl.leave(wall.id, e.currentTarget)}
+      onPointerEnter={(e) => hl.enter(wall.id, e)}
+      onPointerLeave={(e) => hl.leave(wall.id, e)}
       onFocus={() => hl.focus(wall.id)}
     >
       <span className="pn-wallrow__badge" aria-hidden>

@@ -118,7 +118,7 @@ describe("двери", () => {
     const r = calc(makeRoom(RECT, [op("d1", "door", 0, offset)]));
     expect(r.deductions).toHaveLength(1);
     expect(r.deductions[0]).toMatchObject({ openingId: "d1", kind: "door", wallLabel: "A" });
-    expect(r.deductions[0].label).toBe("Дверь 87×207 см");
+    expect(r.deductions[0].label).toBe("Дверь 80 (проём 87×207 см)");
     expect(r.deductions[0].length).toBeCloseTo(0.95, 9);
     expect(r.netLength).toBeCloseTo(13.05, 9);
 
@@ -242,13 +242,80 @@ describe("окна, балкон, мебель", () => {
     expect(r.deductions[0].length).toBeCloseTo(2.0, 9);
   });
 
-  it("мебель (кухня) у угла: плинтуса за ней нет", () => {
+  it("мебель (кухня) у угла: плинтуса за ней и за её боковиной нет", () => {
     const r = calc(makeRoom(RECT, [op("k1", "furniture", 0, 0)]));
-    expect(r.deductions[0]).toMatchObject({ kind: "furniture", label: "Кухня 240×90 см" });
-    expect(r.deductions[0].length).toBeCloseTo(2.4, 9);
+    // Корпус глубиной 0,6 в углу D/A закрывает и 0,6 м стены D.
+    expect(r.deductions[0]).toMatchObject({
+      kind: "furniture",
+      label: "Кухня 240×60 см и боковина 60 см на стене D",
+      wallLabel: "A",
+    });
+    expect(r.deductions[0].length).toBeCloseTo(3.0, 9);
     expect(seg(r, "r:p0:1").from).toBeCloseTo(2.4, 9);
+    expect(seg(r, "r:p3:1").to).toBeCloseTo(2.4, 9);
+    expect(seg(r, "r:p3:1").endJoint).toBe("end"); // заглушка у боковины, а не в углу
+    expect(r.netLength).toBeCloseTo(11, 9);
     expect(r.endCaps).toEqual({ left: 1, right: 1 });
     expect(r.corners.inner).toBe(3);
+    expect(r.warnings).toEqual([]);
+    expectConsistent(r);
+  });
+
+  it("мебель во всю стену 4×3: боковины закрывают по глубине соседние стены", () => {
+    const r = calc(makeRoom(RECT, [op("k1", "furniture", 1, 0, { width: 3 })]));
+    // 14 − 3 − 0,6 − 0,6
+    expect(r.netLength).toBeCloseTo(9.8, 9);
+    expect(seg(r, "r:p0:1").to).toBeCloseTo(3.4, 9);
+    expect(seg(r, "r:p2:1").from).toBeCloseTo(0.6, 9);
+    expect(r.deductions[0].label).toBe("Кухня 300×60 см и боковина 120 см на стене A, C");
+    expectConsistent(r);
+  });
+
+  it("ванна 1,7 м в углу ванной 2,0×1,7: стена D — до 1,0 м", () => {
+    const room = makeRoom([[0, 0], [2, 0], [2, 1.7], [0, 1.7]], [op("b", "furniture", 0, 0, {}, "furn-bath")]);
+    const r = calc(room);
+    expect(seg(r, "r:p3:1").from).toBe(0);
+    expect(seg(r, "r:p3:1").to).toBeCloseTo(1.0, 9);
+    expect(r.netLength).toBeCloseTo(7.4 - 1.7 - 0.7, 9);
+    expectConsistent(r);
+  });
+
+  it("мебель в 1,5 см от угла стоит в углу; в 5 см — нет", () => {
+    const near = calc(makeRoom(RECT, [op("k1", "furniture", 0, 4 - 2.4 - 0.015)]));
+    expect(near.netLength).toBeCloseTo(14 - 2.4 - 0.015 - 0.6, 9);
+    expect(near.segments.some((s) => s.length < 0.05)).toBe(false);
+    expect(seg(near, "r:p1:1").from).toBeCloseTo(0.6, 9);
+    const far = calc(makeRoom(RECT, [op("k1", "furniture", 0, 4 - 2.4 - 0.05)]));
+    expect(far.netLength).toBeCloseTo(14 - 2.4, 9);
+    expect(seg(far, "r:p1:1").from).toBe(0);
+  });
+
+  it("угловая кухня из двух корпусов — без ложного «перекрываются», боковина не вычитается дважды", () => {
+    const r = calc(
+      makeRoom(RECT, [op("k1", "furniture", 0, 4 - 2.4), op("k2", "furniture", 1, 0, { width: 1.8 })]),
+    );
+    // A: 2,4 у угла A/B; B: 1,8 от угла. Боковина k1 на B лежит под k2, боковина k2 на A — под k1.
+    expect(r.netLength).toBeCloseTo(14 - 2.4 - 1.8, 9);
+    expect(r.warnings).toEqual([]);
+    expectConsistent(r);
+  });
+
+  it("эркер 135°: мебель у тупого угла не закрывает соседнюю стену", () => {
+    // BAY: точки (4,2)→(3,3) — угол 135° в точке 2. Шкаф во всю стену B (4,0)→(4,2).
+    const r = calc(makeRoom(BAY, [op("k", "furniture", 1, 0, { width: 2 })]));
+    const c = seg(r, "r:p2:1");
+    expect(c.from).toBe(0); // скошенная стена целиком: за тупым углом плинтус есть
+    expect(seg(r, "r:p0:1").to).toBeCloseTo(3.4, 9); // а угол 90° A/B закрыт на глубину
+    expectConsistent(r);
+  });
+
+  it("мебель у угла через вершину «на прямой»: боковина заходит на следующую стену линии", () => {
+    // A (0→0,3) и B (0,3→4) — одна прямая; шкаф во всю стену D у угла D/A.
+    const room = makeRoom([[0, 0], [0.3, 0], [4, 0], [4, 3], [0, 3]], [op("k", "furniture", 4, 0, { width: 3 })]);
+    const r = calc(room);
+    expect(r.segments.some((s) => s.wallId === "p0")).toBe(false);
+    expect(seg(r, "r:p1:1").from).toBeCloseTo(0.3, 9);
+    expect(r.netLength).toBeCloseTo(14 - 3 - 0.6 - 0.6, 9);
     expectConsistent(r);
   });
 
@@ -917,6 +984,8 @@ describe("случайные комнаты с вершинами «на пря�
           elevation: pick([0, 0.85, 0.03]),
           balconyDoorSide: pick(["left", "right"] as const),
           balconyDoorWidth: pick([0.7, 0.9, 3]),
+          // Боковины мебели в углу (глубина) проверяют свои тесты — здесь модель «блок на своей стене».
+          depth: 0,
         });
       });
       const room: Room = { ...base, openings };

@@ -13,7 +13,8 @@ import { formatArea, formatLength, formatNumber, formatVolume, pluralize } from 
 import { getRoomMetrics } from "../state/hooks";
 import { useAppStore } from "../state/store";
 import { Disclosure, Icon, KV } from "../ui/kit";
-import { countText, joinRu, meters, pctText, stockText, unitWords } from "./format";
+import { USEFUL_OFFCUT } from "./CutPlan";
+import { NBSP, countText, joinRu, meters, pctText, stockText, unitWords } from "./format";
 
 /* --------------------------- Как мы посчитали --------------------------- */
 
@@ -128,6 +129,7 @@ function ProductCalc({
   pe,
   rooms,
   reservePct,
+  minPiece,
   showRooms,
   showProduct,
   openings,
@@ -135,6 +137,8 @@ function ProductCalc({
   pe: ProductEstimate;
   rooms: Map<string, Room>;
   reservePct: number;
+  /** м, «мин. кусок» из настроек раскроя. */
+  minPiece: number;
   showRooms: boolean;
   showProduct: boolean;
   openings: Map<string, Opening>;
@@ -149,12 +153,32 @@ function ProductCalc({
   const mult = 1 + reservePct / 100;
   const roundedUp = Math.abs(ratio - Math.round(ratio)) > 1e-6;
 
+  // Обрезки, из которых вышел бы целый кусок: значит, лишние планки — от того, как нарезаны стены.
+  const longOffcuts = pe.cutPlan.bars.filter((b) => b.waste >= Math.max(minPiece, USEFUL_OFFCUT) - 1e-9).length;
+
   let cutText: ReactNode;
-  if (pe.planksMin > naive) {
+  if (pe.planksMin > naive && p.material === "ceramic") {
+    // У керамики шов между элементами — норма; дело не в склейке, а в том, что кусок режется из одного элемента.
+    cutText = (
+      <>
+        Делением выходит {naive}, но по раскрою — {pe.planksMin}: каждый кусок вырезается из одного элемента, а
+        обрезки короче нужного куска уходят в бой.
+      </>
+    );
+  } else if (pe.planksMin > naive && longOffcuts > 0) {
+    cutText = (
+      <>
+        Делением выходит {naive}, но по раскрою — {pe.planksMin}: каждый кусок режется {words.fromOne}, а куски,
+        на которые поделены длинные стены, не укладываются в планки без остатка. Остаются длинные обрезки (
+        {formatNumber(longOffcuts, 0)}{NBSP}шт.): если перенести стыки на длинных стенах или уменьшить «мин. кусок»
+        ({formatLength(minPiece, "cm")}), ими можно закрыть часть стены — и {words.genPl} понадобится меньше.
+      </>
+    );
+  } else if (pe.planksMin > naive) {
     cutText = (
       <>
         Делением выходит {naive}, но по раскрою — {pe.planksMin}: каждый кусок режется {words.fromOne}, а обрезки
-        оказались короче оставшихся участков. Склеивать плинтус из мелких обрезков нельзя — стык будет заметен.
+        оказались короче нужных кусков. Склеивать плинтус из мелких обрезков нельзя — стык будет заметен.
       </>
     );
   } else {
@@ -246,6 +270,7 @@ export const CalcDetails = memo(function CalcDetails({
               pe={pe}
               rooms={rooms}
               reservePct={s.reservePct}
+              minPiece={s.minPiece}
               showRooms={multiRooms}
               showProduct={estimate.products.length > 1}
               openings={openings}
@@ -260,7 +285,11 @@ export const CalcDetails = memo(function CalcDetails({
           ) : null}
           <div className="rs-calc__params">
             <span>
-              Пропил {formatNumber(s.kerf * 1000, 1, { trim: true })} мм · мин. кусок {formatLength(s.minPiece, "cm")}
+              {/* Керамику режут плиткорезом: домен считает её без пропила. */}
+              {estimate.products.some((pe) => pe.product.material !== "ceramic")
+                ? `Пропил ${formatNumber(s.kerf * 1000, 1, { trim: true })} мм · мин. кусок `
+                : "Мин. кусок "}
+              {formatLength(s.minPiece, "cm")}
               {project.rooms.length > 1
                 ? s.shareOffcuts
                   ? " · обрезки переносятся между комнатами"
@@ -283,6 +312,8 @@ function AccessoryRows({ pe }: { pe: ProductEstimate }) {
   const p = pe.product;
   const acc = pe.accessories;
   const fittings = p.cornerMethod === "fittings";
+  // У ПВХ с кабель-каналом заглушки и соединители остаются и при запиле (см. domain/estimate).
+  const endFittings = fittings || p.cableChannel;
   const sum = (f: (r: RoomSkirtingResult) => number) => pe.rooms.reduce((s, r) => s + f(r), 0);
   const inner = sum((r) => r.corners.inner);
   const outer = sum((r) => r.corners.outer);
@@ -319,11 +350,11 @@ function AccessoryRows({ pe }: { pe: ProductEstimate }) {
         <KV k="Из них не 90°" hint={fittings ? "нужен гибкий (регулируемый) угол" : "запил под половину угла"} v={pcs(nonRight)} />
       ) : null}
       <KV
-        k={fittings ? "Заглушки" : "Торцы"}
+        k={endFittings ? "Заглушки" : "Торцы"}
         hint={
           ends === 0
             ? "плинтус идёт кольцом без разрывов"
-            : fittings
+            : endFittings
               ? p.handedEndCaps
                 ? `у дверей и проёмов: ${left} ${pluralize(left, ["левая", "левые", "левых"])} и ${right} ${pluralize(right, ["правая", "правые", "правых"])}`
                 : "у дверей и проёмов — по заглушке на каждый конец"
@@ -336,7 +367,7 @@ function AccessoryRows({ pe }: { pe: ProductEstimate }) {
         hint={
           pe.joints === 0
             ? "все стены короче планки — стыков нет"
-            : fittings
+            : endFittings
               ? `стены длиннее ${stockText(p.length)} — по соединителю на стык`
               : p.material === "ceramic"
                 ? `стены длиннее ${stockText(p.length)} — элементы кладутся встык со швом`
@@ -345,7 +376,7 @@ function AccessoryRows({ pe }: { pe: ProductEstimate }) {
         v={pcs(pe.joints)}
       />
       {p.fastening === "dowels" || p.fastening === "nails" || p.fastening === "clips" ? (
-        <KV k={p.fastenerName} hint={`через ${step} и по краям каждого участка, ${reserve}`} v={pcs(acc.fasteners)} />
+        <KV k={p.fastenerName} hint={`через ${step}, по краям каждого участка и у каждого стыка, ${reserve}`} v={pcs(acc.fasteners)} />
       ) : null}
       {p.fastening === "clips" ? <KV k="Дюбели для клипс" hint="по одному на клипсу" v={pcs(acc.dowels)} /> : null}
       {p.fastening === "glue" ? (
