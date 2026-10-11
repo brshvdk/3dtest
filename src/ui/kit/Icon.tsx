@@ -5,6 +5,10 @@
 import type { CSSProperties } from "react";
 
 export type IconName =
+  | "walls-auto"
+  | "walls-full"
+  | "walls-low"
+  | "tag"
   | "undo"
   | "redo"
   | "share"
@@ -51,9 +55,34 @@ export type IconName =
   | "camera"
   | "list"
   | "home"
-  | "drag";
+  | "drag"
+  | "corner";
 
 const PATHS: Record<IconName, JSX.Element> = {
+  "walls-auto": (
+    <>
+      <path d="M3 14.5V7.5L12 3l9 4.5v7" />
+      <path d="M3 14.5 12 10l9 4.5M12 10V3M3 14.5 12 19l9-4.5" />
+    </>
+  ),
+  "walls-full": (
+    <>
+      <path d="M12 3 3 7.5v7L12 19l9-4.5v-7z" />
+      <path d="M3 7.5 12 12l9-4.5M12 12v7" />
+    </>
+  ),
+  "walls-low": (
+    <>
+      <path d="M3 12 12 7.5l9 4.5-9 4.5z" />
+      <path d="M3 12v2.5L12 19l9-4.5V12M12 16.5V19" />
+    </>
+  ),
+  tag: (
+    <>
+      <path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z" />
+      <circle cx="7.5" cy="7.5" r="1.2" fill="currentColor" />
+    </>
+  ),
   undo: <path d="M9 14 4 9l5-5M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />,
   redo: <path d="m15 14 5-5-5-5M20 9H9.5a5.5 5.5 0 0 0 0 11H13" />,
   share: (
@@ -241,6 +270,12 @@ const PATHS: Record<IconName, JSX.Element> = {
       <circle cx="15" cy="12" r="1" fill="currentColor" />
       <circle cx="9" cy="18" r="1" fill="currentColor" />
       <circle cx="15" cy="18" r="1" fill="currentColor" />
+    </>
+  ),
+  corner: (
+    <>
+      <path d="M5 4v15h15" />
+      <path d="M9 4v11h11" />
     </>
   ),
 };

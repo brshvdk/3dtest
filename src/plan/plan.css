@@ -1,0 +1,950 @@
+/* =============================================================
+   План: 2D-редактор (pl-*) и статичный план для печати (psvg-*).
+   Цвета — только токены; SVG красится классами.
+   ============================================================= */
+
+.pl-root {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--plan-bg);
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: none;
+  font-family: var(--font);
+  isolation: isolate;
+}
+
+.pl-svg {
+  position: absolute;
+  inset: 0;
+  display: block;
+  touch-action: none;
+  outline: none;
+}
+
+/* ------------------------------ Сетка ------------------------------ */
+
+.pl-grid {
+  fill: none;
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.pl-grid--minor {
+  stroke: var(--plan-grid);
+}
+.pl-grid--major {
+  stroke: var(--plan-grid-major);
+}
+
+/* --------------------------- Комната (общие) --------------------------- */
+
+.pl-floor {
+  fill: var(--plan-floor);
+}
+.pl-wall {
+  fill: var(--plan-wall);
+}
+.pl-gap {
+  fill: var(--plan-floor);
+}
+
+/* Дверь */
+.pl-door__jamb {
+  fill: var(--plan-floor);
+  stroke: var(--plan-door);
+  stroke-width: 1.1;
+}
+.pl-door__leaf {
+  fill: var(--plan-door);
+}
+.pl-door__arc {
+  fill: none;
+  stroke: var(--plan-door);
+  stroke-width: 1.1;
+}
+.pl-door__sweep {
+  fill: var(--plan-door);
+  fill-opacity: 0.06;
+}
+.pl-door__casing {
+  fill: var(--plan-door);
+  fill-opacity: 0.55;
+}
+
+/* Окно */
+.pl-win__body {
+  fill: color-mix(in srgb, var(--plan-window) 13%, var(--plan-floor));
+  stroke: var(--plan-window);
+  stroke-width: 1.2;
+}
+.pl-win__line {
+  stroke: var(--plan-window);
+  stroke-width: 1.2;
+}
+.pl-win__sill {
+  fill: none;
+  stroke: var(--plan-window);
+  stroke-width: 1;
+}
+
+/* Проём / арка */
+.pl-pass__line {
+  fill: none;
+  stroke: var(--plan-dim);
+  stroke-width: 1.1;
+  stroke-dasharray: 5 4;
+  opacity: 0.75;
+}
+.pl-pass__casing {
+  fill: var(--plan-dim);
+  fill-opacity: 0.45;
+}
+
+/* Мебель */
+.pl-hatch {
+  stroke: var(--plan-furniture);
+  stroke-width: 1.1;
+}
+.pl-furn__edge {
+  fill: none;
+  stroke: var(--plan-furniture);
+  stroke-width: 1.4;
+}
+.pl-furn__label {
+  fill: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  paint-order: stroke;
+  stroke: var(--plan-floor);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+/* Плинтус */
+.pl-skirt__line {
+  fill: none;
+  stroke: var(--plan-skirting);
+  stroke-linejoin: miter;
+  stroke-linecap: butt;
+}
+.pl-skirt__cap {
+  fill: none;
+  stroke: var(--plan-skirting);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.pl-skirt-hl__glow {
+  fill: none;
+  stroke: var(--plan-skirting);
+  stroke-opacity: 0.3;
+  stroke-linecap: round;
+}
+.pl-skirt-hl__line {
+  fill: none;
+  stroke: var(--plan-skirting);
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, var(--plan-skirting) 60%, transparent));
+}
+
+/* --------------------------- Интерактив --------------------------- */
+
+/* Сетка слегка просвечивает сквозь пол — ориентир при сильном увеличении. */
+.pl-root .pl-floor {
+  fill-opacity: 0.84;
+}
+
+.pl-wall--hover {
+  fill: var(--plan-wall-hover);
+}
+.pl-wall--sel {
+  fill: var(--primary);
+}
+.pl-op--hover {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.8;
+}
+.pl-op--sel {
+  fill: var(--primary);
+  fill-opacity: 0.07;
+  stroke: var(--primary);
+  stroke-width: 1.5;
+}
+.pl-dim {
+  fill: none;
+  stroke: var(--primary);
+  stroke-width: 1;
+}
+.pl-center-mark {
+  stroke: var(--primary);
+  stroke-width: 1.4;
+  stroke-dasharray: 3 3;
+}
+.pl-guide {
+  stroke: var(--accent);
+  stroke-width: 1;
+  stroke-dasharray: 5 4;
+}
+.pl-handle {
+  fill: var(--surface);
+  stroke: var(--primary);
+  stroke-width: 1.8;
+  transition: r 120ms ease;
+}
+.pl-handle.is-hover {
+  fill: var(--primary-weak-2);
+}
+.pl-handle.is-sel {
+  fill: var(--primary);
+  stroke: var(--surface);
+  stroke-width: 2.2;
+}
+.pl-wdims__line,
+.pl-wdims__tick {
+  fill: none;
+  stroke: var(--plan-dim);
+  stroke-width: 1;
+  opacity: 0.38;
+}
+.pl-wdims__tick {
+  stroke-width: 1.3;
+  opacity: 0.55;
+}
+
+/* ------------------------------ Подписи ------------------------------ */
+
+.pl-html {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+.pl-anchor {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: auto;
+}
+/* Подсказки не должны перехватывать курсор (иначе hover мигает). */
+.pl-anchor--passive,
+.pl-anchor--passive * {
+  pointer-events: none;
+}
+
+.pl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  line-height: 1;
+  white-space: nowrap;
+  transition:
+    background var(--transition),
+    border-color var(--transition),
+    color var(--transition),
+    box-shadow var(--transition);
+}
+button.pl-chip {
+  cursor: text;
+}
+.pl-chip b {
+  font-weight: 700;
+}
+.pl-chip__sep {
+  color: var(--text-3);
+}
+.pl-chip--wall b {
+  color: var(--text-2);
+}
+.pl-chip--wall.is-compact {
+  min-width: 24px;
+  justify-content: center;
+  padding: 0 6px;
+}
+.pl-chip--wall:hover,
+.pl-chip--wall.is-hover {
+  border-color: var(--primary);
+}
+.pl-chip--wall:hover b,
+.pl-chip--wall.is-hover b {
+  color: var(--primary);
+}
+.pl-chip--wall:active {
+  transform: scale(0.97);
+}
+.pl-chip--wall.is-sel {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+}
+.pl-chip--wall.is-sel b,
+.pl-chip--wall.is-sel .pl-chip__sep {
+  color: inherit;
+  opacity: 0.85;
+}
+.pl-chip--wall.is-live {
+  background: var(--primary-weak);
+  border-color: var(--primary);
+  color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-weak);
+}
+.pl-chip--wall.is-live b,
+.pl-chip--wall.is-live .pl-chip__sep {
+  color: inherit;
+}
+
+.pl-chip--dim {
+  height: 22px;
+  padding: 0 7px;
+  border-color: var(--primary);
+  color: var(--primary);
+  font-size: 11.5px;
+  font-weight: 650;
+}
+.pl-chip--dim:hover {
+  background: var(--primary-weak);
+}
+.pl-chip--dim.is-tight {
+  box-shadow: var(--shadow-md);
+}
+
+.pl-chip--skirt {
+  border-color: color-mix(in srgb, var(--plan-skirting) 55%, var(--border-strong));
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+.pl-chip__dot {
+  width: 10px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--plan-skirting);
+  margin-right: 2px;
+}
+.pl-chip--angle {
+  height: 22px;
+  padding: 0 7px;
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--on-primary);
+  font-weight: 650;
+  pointer-events: none;
+}
+
+.pl-chip--edit {
+  height: 28px;
+  padding: 0 9px 0 4px;
+  gap: 2px;
+  border-color: var(--primary);
+  box-shadow: var(--focus-ring), var(--shadow-md);
+  cursor: auto;
+}
+.pl-chip--edit.is-error {
+  border-color: var(--danger);
+  animation: pl-shake 0.3s;
+}
+.pl-chip__input {
+  min-width: 3ch;
+  width: auto;
+  padding: 0 3px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-base);
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.pl-chip__unit {
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+}
+@keyframes pl-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+
+/* ------------------------------ Оверлеи ------------------------------ */
+
+.pl-glass {
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.pl-summary {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  max-width: calc(100% - 24px);
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-sm);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.pl-summary__name {
+  color: var(--text);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pl-summary__sep {
+  flex: none;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.pl-summary__skirt {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+}
+.pl-summary__swatch {
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--plan-skirting);
+}
+.pl-summary__off {
+  color: var(--text-3);
+}
+
+.pl-zoom {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+}
+.pl-zoom .k-btn {
+  --btn-h: 34px;
+}
+.pl-zoom__sep {
+  height: 1px;
+  margin: 1px 5px;
+  background: var(--border);
+}
+
+.pl-bottom-left {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 2;
+  pointer-events: none;
+}
+.pl-scale {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+.pl-scale__label {
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  color: var(--text-2);
+}
+.pl-scale__bar {
+  display: block;
+  height: 6px;
+  border: 1.5px solid var(--text-3);
+  border-top: 0;
+  transition: width 120ms ease;
+}
+
+.pl-hint {
+  position: absolute;
+  /* Между линейкой масштаба (слева) и кнопками масштаба (справа), по центру. */
+  left: 150px;
+  right: 64px;
+  bottom: 14px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: 660px;
+  margin-inline: auto;
+  padding: 6px 6px 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow-md);
+  color: var(--text-2);
+  font-size: var(--fs-sm);
+  line-height: 1.35;
+  animation: pl-fade 0.25s ease-out;
+}
+.pl-hint__icon {
+  color: var(--primary);
+}
+.pl-hint__text {
+  min-width: 0;
+}
+.pl-hint__item {
+  white-space: nowrap;
+}
+.pl-hint__item b {
+  font-weight: 600;
+  color: var(--text);
+}
+.pl-hint__dot {
+  color: var(--text-3);
+}
+.pl-hint.is-left {
+  left: 12px;
+  margin-inline: 0;
+}
+/* Столбиком: по пункту в строке, без точек-разделителей. */
+.pl-hint.is-stacked {
+  align-items: flex-start;
+  padding: 8px 6px 8px 12px;
+  border-radius: var(--radius-md);
+}
+.pl-hint.is-stacked .pl-hint__icon {
+  margin-top: 2px;
+}
+.pl-hint.is-stacked .pl-hint__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pl-hint__close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-3);
+}
+.pl-hint__close:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+/* --------------------------- Контекстная панель --------------------------- */
+
+.pl-ctx {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 318px;
+  max-width: calc(100% - 16px);
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  user-select: none;
+  animation: pl-pop 0.16s ease-out;
+  transition: opacity 120ms ease;
+  cursor: default;
+}
+.pl-ctx.is-measuring {
+  left: 0;
+  top: 0;
+  visibility: hidden;
+  animation: none;
+}
+.pl-ctx.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+.pl-ctx.is-docked {
+  left: 50%;
+  bottom: 8px;
+  top: auto;
+  width: min(560px, calc(100% - 16px));
+  max-width: none;
+  transform: translateX(-50%);
+  animation: pl-rise 0.18s ease-out;
+}
+
+.pl-ctx__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.pl-ctx__badge,
+.pl-ctx__icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  font-size: var(--fs-md);
+  font-weight: 750;
+}
+.pl-ctx__badge {
+  background: var(--primary);
+  color: var(--on-primary);
+}
+.pl-ctx__icon {
+  background: var(--primary-weak);
+  color: var(--plan-door);
+}
+.pl-ctx__icon--window,
+.pl-ctx__icon--balcony {
+  background: color-mix(in srgb, var(--plan-window) 14%, transparent);
+  color: var(--plan-window);
+}
+.pl-ctx__icon--passage,
+.pl-ctx__icon--furniture {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+.pl-ctx__icon--point {
+  background: var(--primary-weak);
+}
+.pl-ctx__dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--primary);
+  box-shadow: 0 0 0 2px var(--surface), 0 0 0 3.5px var(--primary);
+}
+.pl-ctx__titles {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.pl-ctx__title {
+  font-size: var(--fs-base);
+  font-weight: 650;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-ctx__wall {
+  font-weight: 500;
+  color: var(--text-3);
+}
+.pl-ctx__sub {
+  margin-top: 1px;
+  font-size: var(--fs-sm);
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-ctx__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pl-ctx__row .k-btn {
+  margin-left: auto;
+}
+.pl-ctx__label {
+  font-size: var(--fs-sm);
+  font-weight: 550;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.pl-ctx__len {
+  width: 112px;
+  flex: none;
+}
+.pl-ctx__cap {
+  margin-bottom: -3px;
+  font-size: var(--fs-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.pl-ctx__adds {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+.pl-ctx__adds .k-btn {
+  flex-direction: column;
+  gap: 4px;
+  height: 54px;
+  padding: 0 4px;
+  font-size: var(--fs-sm);
+}
+.pl-ctx__adds .k-btn svg {
+  color: var(--primary);
+}
+.pl-ctx__opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+.pl-ctx__opt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pl-ctx__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pl-ctx__actions > .pl-ctx__end {
+  margin-left: auto;
+}
+.pl-ctx__hint {
+  margin-top: -2px;
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.35;
+}
+.pl-ctx__sub--skirt {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  /* «Окно выше плинтуса — не влияет» и «… · +30 см в откосы» — переносим, а не обрезаем. */
+  white-space: normal;
+  line-height: 1.35;
+}
+.pl-ctx__sub--skirt::before {
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 3px;
+  margin-top: 0.55em;
+  border-radius: 2px;
+  background: var(--plan-skirting);
+}
+.pl-ctx__sub--none::before {
+  background: var(--text-3);
+  opacity: 0.5;
+}
+.pl-ctx__note {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  line-height: 1.35;
+}
+
+@keyframes pl-pop {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pl-rise {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 10px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+@keyframes pl-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* --------------------------- Узкий план / телефон --------------------------- */
+
+.pl-root.is-narrow .pl-summary {
+  top: 8px;
+  left: 8px;
+  max-width: calc(100% - 64px);
+  height: 28px;
+  padding: 0 10px;
+  gap: 7px;
+}
+.pl-root.is-narrow .pl-zoom {
+  top: 8px;
+  right: 8px;
+  bottom: auto;
+}
+.pl-root.is-narrow .pl-bottom-left {
+  left: 10px;
+  bottom: 10px;
+}
+.pl-root.is-narrow .pl-hint {
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: auto;
+  max-width: none;
+  border-radius: var(--radius-md);
+  align-items: flex-start;
+  padding: 8px 6px 8px 10px;
+}
+.pl-root.is-narrow .pl-hint__icon {
+  margin-top: 1px;
+}
+.pl-root.is-narrow .pl-hint__item {
+  white-space: normal;
+}
+.pl-root.is-narrow .pl-hint.is-stacked {
+  padding: 8px 6px 8px 10px;
+}
+.pl-root.is-narrow .pl-ctx {
+  padding: 10px;
+  gap: 8px;
+}
+.pl-root.is-narrow .pl-ctx__adds .k-btn {
+  height: 48px;
+}
+/* Компактная панель внизу (телефон): меньше строк, план над ней остаётся виден. */
+.pl-ctx.is-compact .pl-ctx__head > .pl-ctx__len {
+  width: 104px;
+}
+.pl-ctx__adds--5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+.pl-ctx.is-compact .pl-ctx__adds .k-btn {
+  height: 50px;
+  padding: 0 2px;
+}
+.pl-ctx.is-compact .pl-ctx__opts {
+  gap: 8px;
+}
+.pl-ctx.is-compact > .pl-ctx__note {
+  margin-top: -4px;
+}
+.pl-root.is-coarse .pl-chip {
+  height: 28px;
+}
+/* Пальцем — крупнее кнопки и переключатели контекстной панели. */
+.pl-root.is-coarse .pl-ctx .k-btn--sm {
+  --btn-h: 38px;
+}
+.pl-root.is-coarse .pl-ctx .k-seg--sm > button {
+  height: 32px;
+  padding: 0 12px;
+}
+.pl-root.is-coarse .pl-chip--dim,
+.pl-root.is-coarse .pl-chip--angle {
+  height: 26px;
+}
+
+/* ===================== Статичный план (PlanSvg) ===================== */
+
+.psvg {
+  display: block;
+  overflow: visible;
+  font-family: var(--font);
+  --psvg-halo: var(--surface);
+}
+.psvg-dims__line {
+  fill: none;
+  stroke: var(--plan-dim);
+  stroke-width: 0.8;
+  opacity: 0.6;
+}
+.psvg-dims__tick {
+  fill: none;
+  stroke: var(--plan-dim);
+  stroke-width: 1.2;
+}
+.psvg-dims__text {
+  fill: var(--plan-dim);
+  font-size: 10.5px;
+  font-weight: 600;
+  text-anchor: middle;
+  dominant-baseline: central;
+  paint-order: stroke;
+  stroke: var(--psvg-halo);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+  font-variant-numeric: tabular-nums;
+}
+.psvg .pl-furn__label {
+  stroke: var(--psvg-halo);
+}
+
+/* Печать и превью листа: светлая палитра независимо от темы, читаемо в ч/б. */
+.print-only .psvg,
+.print-preview .psvg {
+  --plan-floor: #ffffff;
+  --plan-wall: #26282c;
+  --plan-dim: #2a2a30;
+  --plan-door: #3a3d44;
+  --plan-window: #4a6f8c;
+  --plan-furniture: #9a958a;
+  --plan-skirting: #e0600f;
+  --text-2: #3a3a40;
+  --psvg-halo: #ffffff;
+}
+@media print {
+  .psvg {
+    --plan-floor: #ffffff;
+    --plan-wall: #26282c;
+    --plan-dim: #2a2a30;
+    --plan-door: #3a3d44;
+    --plan-window: #4a6f8c;
+    --plan-furniture: #9a958a;
+    --plan-skirting: #e0600f;
+    --text-2: #3a3a40;
+    --psvg-halo: #ffffff;
+  }
+  .psvg .pl-door__sweep {
+    fill-opacity: 0;
+  }
+}

@@ -1,0 +1,449 @@
+/**
+ * Подробности итога: «Как мы посчитали», «Углы, стыки, крепёж», «Комната».
+ * Всё — простым языком и с числами, чтобы пользователь мог проверить расчёт.
+ */
+import { memo, useMemo, type ReactNode } from "react";
+import { FASTENER_RESERVE, type ProductEstimate, type ProjectEstimate } from "../domain/estimate";
+import { wallLabel } from "../domain/geometry";
+import { affectsSkirting, describeOpening } from "../domain/openings";
+import { computeProjectMetrics } from "../domain/roomMetrics";
+import type { RoomSkirtingResult } from "../domain/skirtingCalc";
+import type { Opening, Project, Room } from "../domain/types";
+import { formatArea, formatLength, formatNumber, formatVolume, pluralize } from "../domain/units";
+import { getRoomMetrics } from "../state/hooks";
+import { useAppStore } from "../state/store";
+import { Disclosure, Icon, KV } from "../ui/kit";
+import { countText, joinRu, meters, pctText, stockText, unitWords } from "./format";
+
+/* --------------------------- Как мы посчитали --------------------------- */
+
+function Line({
+  sign,
+  label,
+  hint,
+  value,
+  tone,
+}: {
+  sign?: "−" | "+" | "=";
+  label: ReactNode;
+  hint?: ReactNode;
+  value: ReactNode;
+  tone?: "minus" | "plus" | "total" | "zero";
+}) {
+  return (
+    <div className={`rs-line${tone ? ` rs-line--${tone}` : ""}`}>
+      <span className="rs-line__sign" aria-hidden>
+        {sign ?? ""}
+      </span>
+      <span className="rs-line__label">
+        {label}
+        {hint ? <span className="rs-line__hint">{hint}</span> : null}
+      </span>
+      <span className="rs-line__value num">{value}</span>
+    </div>
+  );
+}
+
+/** Почему проём не уменьшил плинтус: окно выше плинтуса или его место уже вычтено соседним проёмом. */
+function zeroReason(o: Opening, skirtingHeight: number): string {
+  if (!affectsSkirting(o, skirtingHeight)) {
+    return o.kind === "window" ? "выше плинтуса — не мешает" : "не мешает плинтусу";
+  }
+  return "перекрыт другим проёмом — уже учтён";
+}
+
+function RoomCalc({
+  r,
+  room,
+  skirtingHeight,
+  showName,
+  openings,
+}: {
+  r: RoomSkirtingResult;
+  room: Room | undefined;
+  skirtingHeight: number;
+  showName: boolean;
+  openings: Map<string, Opening>;
+}) {
+  const counted = new Set([...r.deductions.map((d) => d.openingId), ...r.reveals.map((rv) => rv.openingId)]);
+  const zero = room ? room.openings.filter((o) => !counted.has(o.id)) : [];
+  const wallOf = room ? new Map(room.points.map((p, i) => [p.id, i])) : new Map<string, number>();
+  return (
+    <div className="rs-calc__room">
+      {showName ? <div className="rs-calc__room-name">{r.roomName}</div> : null}
+      <Line label="Периметр комнаты" hint="сумма длин всех стен" value={meters(r.perimeter)} />
+      {r.deductions.map((d) => (
+        <Line
+          key={d.openingId}
+          sign="−"
+          tone="minus"
+          label={d.label}
+          hint={`стена ${d.wallLabel}${(openings.get(d.openingId)?.casing ?? 0) > 0 && d.kind !== "furniture" ? " · с наличниками" : ""}`}
+          value={`−${formatLength(d.length)}`}
+        />
+      ))}
+      {r.reveals.map((rv) => (
+        <Line
+          key={rv.openingId}
+          sign="+"
+          tone="plus"
+          label={`Откосы: ${rv.label}`}
+          hint={`стена ${rv.wallLabel} · плинтус заходит в проём`}
+          value={`+${formatLength(rv.length)}`}
+        />
+      ))}
+      {zero.map((o) => (
+        <Line
+          key={o.id}
+          tone="zero"
+          label={describeOpening(o)}
+          hint={`стена ${wallOf.has(o.wallId) ? wallLabel(wallOf.get(o.wallId)!) : "?"} · ${zeroReason(o, skirtingHeight)}`}
+          value={formatLength(0)}
+        />
+      ))}
+      <Line sign="=" tone="total" label="Плинтус по стенам" value={meters(r.netLength)} />
+    </div>
+  );
+}
+
+
+function Step({ n, title, value, children }: { n: number; title: ReactNode; value: ReactNode; children?: ReactNode }) {
+  return (
+    <li className="rs-step">
+      <span className="rs-step__n" aria-hidden>
+        {n}
+      </span>
+      <div className="rs-step__body">
+        <div className="rs-step__head">
+          <span className="rs-step__title">{title}</span>
+          <span className="rs-step__value num">{value}</span>
+        </div>
+        {children ? <p className="rs-step__text">{children}</p> : null}
+      </div>
+    </li>
+  );
+}
+
+function ProductCalc({
+  pe,
+  rooms,
+  reservePct,
+  showRooms,
+  showProduct,
+  openings,
+}: {
+  pe: ProductEstimate;
+  rooms: Map<string, Room>;
+  reservePct: number;
+  showRooms: boolean;
+  showProduct: boolean;
+  openings: Map<string, Opening>;
+}) {
+  const p = pe.product;
+  const words = unitWords(p);
+  const forms = words.forms;
+  const L = p.length;
+  const ratio = pe.netLength / L;
+  const naive = pe.planksNaive;
+  const ratioText = formatNumber(ratio, ratio < 10 ? 2 : 1, { trim: true });
+  const mult = 1 + reservePct / 100;
+  const roundedUp = Math.abs(ratio - Math.round(ratio)) > 1e-6;
+
+  let cutText: ReactNode;
+  if (pe.planksMin > naive) {
+    cutText = (
+      <>
+        Делением выходит {naive}, но по раскрою — {pe.planksMin}: каждый кусок режется {words.fromOne}, а обрезки
+        оказались короче оставшихся участков. Склеивать плинтус из мелких обрезков нельзя — стык будет заметен.
+      </>
+    );
+  } else {
+    cutText = (
+      <>
+        {roundedUp ? `${ratioText} ${words.gen} не купить — округляем до ${naive}. ` : ""}
+        Каждая стена собирается из кусков, остаются обрезки — на схеме раскроя они заштрихованы.
+      </>
+    );
+  }
+
+  return (
+    <div className="rs-calc__product">
+      {showProduct ? <div className="rs-calc__product-name">{p.name}</div> : null}
+      {pe.rooms.map((r) => (
+        <RoomCalc
+          key={r.roomId}
+          r={r}
+          room={rooms.get(r.roomId)}
+          skirtingHeight={p.height}
+          showName={showRooms}
+          openings={openings}
+        />
+      ))}
+      {pe.rooms.length > 1 ? (
+        <Line
+          sign="="
+          tone="total"
+          label="Всего плинтуса"
+          hint={pe.rooms.map((r) => formatNumber(r.netLength, 2)).join(" + ")}
+          value={meters(pe.netLength)}
+        />
+      ) : null}
+
+      {pe.netLength > 0 ? (
+        <ol className="rs-steps">
+          <Step
+            n={1}
+            title={`Делим на длину ${words.gen}`}
+            value={`${formatNumber(pe.netLength, 2)} ÷ ${formatNumber(L, 2, { trim: true })} = ${ratioText}`}
+          />
+          <Step n={2} title={`Раскрой по ${p.material === "ceramic" ? "элементам" : "планкам"}`} value={countText(pe.planksMin, forms)}>
+            {cutText}
+          </Step>
+          <Step
+            n={3}
+            title={reservePct > 0 ? `Добавляем запас ${pctText(reservePct)}` : "Запас"}
+            value={reservePct > 0 ? `+${formatNumber(pe.reservePlanks, 0)}` : "нет"}
+          >
+            {reservePct > 0
+              ? `${pe.planksMin} × ${formatNumber(mult, 3, { trim: true })} = ${formatNumber(pe.planksMin * mult, 2, { trim: true })} → округляем вверх. Запас — на брак и ошибку при резке.`
+              : "Без запаса рискованно: одна ошибка при резке — и придётся ехать в магазин ещё раз."}
+          </Step>
+          <li className="rs-steps__result">
+            <span>Заказать</span>
+            <span className="num">
+              {countText(pe.planksToOrder, forms)} · {stockText(pe.lengthToOrder)}
+            </span>
+          </li>
+        </ol>
+      ) : null}
+    </div>
+  );
+}
+
+export const CalcDetails = memo(function CalcDetails({
+  project,
+  estimate,
+  defaultOpen,
+}: {
+  project: Project;
+  estimate: ProjectEstimate;
+  defaultOpen: boolean;
+}) {
+  const setPanelTab = useAppStore((s) => s.setPanelTab);
+  const s = project.skirting;
+  const multiRooms = estimate.rooms.length > 1;
+  const skipped = project.rooms.filter((r) => !r.skirtingEnabled).map((r) => `«${r.name}»`);
+  const openings = useMemo(() => new Map(project.rooms.flatMap((r) => r.openings.map((o) => [o.id, o] as const))), [project]);
+  const rooms = useMemo(() => new Map(project.rooms.map((r) => [r.id, r] as const)), [project]);
+
+  return (
+    <section className="k-section rs-details">
+      <Disclosure title="Как мы посчитали" icon="list" defaultOpen={defaultOpen}>
+        <div className="rs-calc">
+          {estimate.products.map((pe) => (
+            <ProductCalc
+              key={pe.product.id}
+              pe={pe}
+              rooms={rooms}
+              reservePct={s.reservePct}
+              showRooms={multiRooms}
+              showProduct={estimate.products.length > 1}
+              openings={openings}
+            />
+          ))}
+          {skipped.length ? (
+            <p className="rs-calc__note">
+              {skipped.length > 1
+                ? `Не учитываются ${joinRu(skipped)} — в этих комнатах расчёт плинтуса выключен.`
+                : `Не учитывается ${skipped[0]} — в этой комнате расчёт плинтуса выключен.`}
+            </p>
+          ) : null}
+          <div className="rs-calc__params">
+            <span>
+              Пропил {formatNumber(s.kerf * 1000, 1, { trim: true })} мм · мин. кусок {formatLength(s.minPiece, "cm")}
+              {project.rooms.length > 1
+                ? s.shareOffcuts
+                  ? " · обрезки переносятся между комнатами"
+                  : " · обрезки между комнатами не переносятся"
+                : ""}
+            </span>
+            <button type="button" className="rs-link" onClick={() => setPanelTab("skirting")}>
+              Изменить
+            </button>
+          </div>
+        </div>
+      </Disclosure>
+    </section>
+  );
+});
+
+/* ------------------------- Углы, стыки, крепёж ------------------------- */
+
+function AccessoryRows({ pe }: { pe: ProductEstimate }) {
+  const p = pe.product;
+  const acc = pe.accessories;
+  const fittings = p.cornerMethod === "fittings";
+  const sum = (f: (r: RoomSkirtingResult) => number) => pe.rooms.reduce((s, r) => s + f(r), 0);
+  const inner = sum((r) => r.corners.inner);
+  const outer = sum((r) => r.corners.outer);
+  const nonRight = sum((r) => r.corners.nonRight);
+  const left = sum((r) => r.endCaps.left);
+  const right = sum((r) => r.endCaps.right);
+  const ends = left + right;
+  const pcs = (n: number) => `${formatNumber(n, 0)} шт`;
+  const words = unitWords(p);
+  const step = formatLength(p.fastenerStep, "cm");
+  const reserve = `+${pctText(FASTENER_RESERVE * 100, 0)} запас`;
+
+  if (pe.netLength <= 0) return <p className="rs-empty-line">Плинтус не нужен — фурнитура и крепёж тоже.</p>;
+
+  return (
+    <div className="rs-acc">
+      <KV
+        k="Внутренние углы"
+        hint={fittings ? "по уголку на каждый угол комнаты" : "запил 45° — уголки не нужны"}
+        v={pcs(inner)}
+      />
+      {outer > 0 ? (
+        <KV
+          k="Наружные углы"
+          hint={
+            fittings
+              ? "выступы стен, короба, откосы проёмов"
+              : "запил 45°: кусок берём длиннее на толщину плинтуса"
+          }
+          v={pcs(outer)}
+        />
+      ) : null}
+      {nonRight > 0 ? (
+        <KV k="Из них не 90°" hint={fittings ? "нужен гибкий (регулируемый) угол" : "запил под половину угла"} v={pcs(nonRight)} />
+      ) : null}
+      <KV
+        k={fittings ? "Заглушки" : "Торцы"}
+        hint={
+          ends === 0
+            ? "плинтус идёт кольцом без разрывов"
+            : fittings
+              ? p.handedEndCaps
+                ? `у дверей и проёмов: ${left} ${pluralize(left, ["левая", "левые", "левых"])} и ${right} ${pluralize(right, ["правая", "правые", "правых"])}`
+                : "у дверей и проёмов — по заглушке на каждый конец"
+              : "у дверей и проёмов: торец подрезается к наличнику"
+        }
+        v={pcs(ends)}
+      />
+      <KV
+        k={`Стыки ${words.genPl}`}
+        hint={
+          pe.joints === 0
+            ? "все стены короче планки — стыков нет"
+            : fittings
+              ? `стены длиннее ${stockText(p.length)} — по соединителю на стык`
+              : p.material === "ceramic"
+                ? `стены длиннее ${stockText(p.length)} — элементы кладутся встык со швом`
+                : `стены длиннее ${stockText(p.length)} — стык встык или на ус (45°)`
+        }
+        v={pcs(pe.joints)}
+      />
+      {p.fastening === "dowels" || p.fastening === "nails" || p.fastening === "clips" ? (
+        <KV k={p.fastenerName} hint={`через ${step} и по краям каждого участка, ${reserve}`} v={pcs(acc.fasteners)} />
+      ) : null}
+      {p.fastening === "clips" ? <KV k="Дюбели для клипс" hint="по одному на клипсу" v={pcs(acc.dowels)} /> : null}
+      {p.fastening === "glue" ? (
+        <KV
+          k={p.fastenerName}
+          hint={`≈ ${formatNumber(p.glueRate, 1, { trim: true })} пог. м на тубу: ${formatNumber(pe.netLength, 2)} ÷ ${formatNumber(p.glueRate, 1, { trim: true })} → вверх`}
+          v={`${formatNumber(acc.glue, 0)} туб`}
+        />
+      ) : null}
+      {p.fastening === "adhesive" ? (
+        <KV
+          k={p.fastenerName}
+          hint={`≈ ${formatNumber(p.glueRate, 2, { trim: true })} кг на пог. м: ${formatNumber(pe.netLength, 2)} × ${formatNumber(p.glueRate, 2, { trim: true })} → вверх`}
+          v={`${formatNumber(acc.glue, 0)} кг`}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/* ------------------------------- Комната ------------------------------- */
+
+function RoomMetricsView({ project, room }: { project: Project; room: Room }) {
+  const m = getRoomMetrics(room);
+  const total = useMemo(
+    () => (project.rooms.length > 1 ? computeProjectMetrics(project).total : null),
+    [project],
+  );
+  return (
+    <div className="rs-room">
+      <dl className="rs-tiles">
+        <div className="rs-tile">
+          <dt>Площадь пола</dt>
+          <dd className="num">{formatArea(m.floorArea, 1)}</dd>
+        </div>
+        <div className="rs-tile">
+          <dt>Периметр</dt>
+          <dd className="num">{meters(m.perimeter)}</dd>
+        </div>
+        <div className="rs-tile">
+          <dt>Объём</dt>
+          <dd className="num">{formatVolume(m.volume)}</dd>
+        </div>
+        <div className="rs-tile">
+          <dt>Стены без проёмов</dt>
+          <dd className="num">{formatArea(m.wallAreaNet, 1)}</dd>
+        </div>
+      </dl>
+      <KV k="Высота потолка" v={meters(room.height)} />
+      <KV
+        k="Стены и углы"
+        v={`${m.walls} ${pluralize(m.walls, ["стена", "стены", "стен"])} · ${m.innerCorners + m.outerCorners} ${pluralize(m.innerCorners + m.outerCorners, ["угол", "угла", "углов"])}`}
+      />
+      {m.openingsArea > 0 ? <KV k="Площадь проёмов" v={formatArea(m.openingsArea, 1)} /> : null}
+      {total ? (
+        <div className="rs-room__total">
+          <Icon name="home" size={15} />
+          <span>
+            Все комнаты ({project.rooms.length}): пол {formatArea(total.floorArea, 1)}, периметр {meters(total.perimeter)}
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export const ExtraDetails = memo(function ExtraDetails({
+  project,
+  estimate,
+  activeRoom,
+}: {
+  project: Project;
+  estimate: ProjectEstimate;
+  activeRoom: Room;
+}) {
+  // Плинтус не нужен ни в одной комнате — фурнитуры и крепежа тоже нет, раздел не показываем.
+  const products = estimate.products.filter((pe) => pe.netLength > 0);
+  const corners = products.reduce((s, pe) => s + pe.rooms.reduce((a, r) => a + r.corners.inner + r.corners.outer, 0), 0);
+  return (
+    <section className="k-section rs-details">
+      {products.length ? (
+        <Disclosure
+          title="Углы, стыки, крепёж"
+          icon="settings"
+          right={corners > 0 ? `${corners} ${pluralize(corners, ["угол", "угла", "углов"])}` : undefined}
+        >
+          {products.map((pe) => (
+            <div key={pe.product.id} className="rs-acc-group">
+              {products.length > 1 ? <div className="rs-calc__product-name">{pe.product.shortName}</div> : null}
+              <AccessoryRows pe={pe} />
+            </div>
+          ))}
+        </Disclosure>
+      ) : null}
+      <Disclosure title="Комната" icon="room" right={activeRoom.name}>
+        <RoomMetricsView project={project} room={activeRoom} />
+      </Disclosure>
+    </section>
+  );
+});
+

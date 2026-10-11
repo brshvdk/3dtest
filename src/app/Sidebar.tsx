@@ -47,12 +47,16 @@ export function Sidebar({ showResultTab }: { showResultTab: boolean }) {
             className={`step${t.id === current ? " is-active" : ""}`}
             onClick={() => setTab(t.id)}
           >
-            <span className="step__num">{i + 1}</span>
-            <Icon name={t.icon} size={16} className="step__icon" />
+            <span className="step__top">
+              <span className="step__num">{i + 1}</span>
+              <Icon name={t.icon} size={17} className="step__icon" />
+              {t.id === "openings" && openingsCount > 0 ? (
+                <span className="step__count" aria-label={`${openingsCount} шт.`}>
+                  {openingsCount}
+                </span>
+              ) : null}
+            </span>
             <span className="step__label">{t.label}</span>
-            {t.id === "openings" && openingsCount > 0 ? (
-              <span className="step__count">{openingsCount}</span>
-            ) : null}
           </button>
         ))}
       </nav>

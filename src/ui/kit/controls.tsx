@@ -325,13 +325,21 @@ function NumericInput({
   const [focused, setFocused] = useState(false);
   const [error, setError] = useState(false);
   const ref = useRef<HTMLInputElement>(null);
+  // Пользователь что-то напечатал с момента фокуса. Если нет — blur ничего не
+  // применяет (иначе после стрелок ↑/↓ старый текст вернул бы старое значение).
+  const dirtyRef = useRef(false);
+  // Следующий blur не должен применять ввод (Esc — отмена, Enter — уже применён).
+  const skipBlurRef = useRef(false);
 
-  // Внешнее значение меняется (перетаскивание на плане) — обновляем, если не редактируем.
+  // Внешнее значение меняется (перетаскивание на плане, стрелки) — обновляем
+  // черновик, если пользователь сейчас не печатает.
   useEffect(() => {
-    if (!focused) setDraft(text);
+    if (!focused || !dirtyRef.current) setDraft(text);
   }, [text, focused]);
 
   const commit = () => {
+    if (!dirtyRef.current) return;
+    dirtyRef.current = false;
     const v = parse(draft);
     if (v === null) {
       setError(true);
@@ -339,19 +347,26 @@ function NumericInput({
       window.setTimeout(() => setError(false), 900);
       return;
     }
-    const c = clamp(v);
-    onCommit(c);
+    onCommit(clamp(v));
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       commit();
+      skipBlurRef.current = true;
       ref.current?.blur();
     } else if (e.key === "Escape") {
+      dirtyRef.current = false;
       setDraft(text);
+      skipBlurRef.current = true;
       ref.current?.blur();
     } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
+      // Напечатанное, но не применённое значение — сначала применяем.
+      if (dirtyRef.current) {
+        commit();
+        return;
+      }
       onStep(e.key === "ArrowUp" ? 1 : -1, e.shiftKey);
     }
   };
@@ -376,14 +391,20 @@ function NumericInput({
         onFocus={(e) => {
           setFocused(true);
           setDraft(text);
+          dirtyRef.current = false;
+          skipBlurRef.current = false;
           const el = e.currentTarget;
           requestAnimationFrame(() => el.select());
         }}
         onBlur={() => {
           setFocused(false);
-          commit();
+          if (skipBlurRef.current) skipBlurRef.current = false;
+          else commit();
         }}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          dirtyRef.current = true;
+          setDraft(e.target.value);
+        }}
         onKeyDown={onKeyDown}
       />
       {suffix ? <span className="k-input__suffix">{suffix}</span> : null}
@@ -420,10 +441,16 @@ export function TextField({
   const id = useId();
   const [draft, setDraft] = useState(value);
   const [focused, setFocused] = useState(false);
+  const cancelRef = useRef(false);
   useEffect(() => {
     if (!focused) setDraft(value);
   }, [value, focused]);
   const commit = () => {
+    if (cancelRef.current) {
+      cancelRef.current = false;
+      setDraft(value);
+      return;
+    }
     const v = draft.trim();
     if (v && v !== value) onChange(v);
     else setDraft(value);
@@ -450,7 +477,7 @@ export function TextField({
         onKeyDown={(e) => {
           if (e.key === "Enter") (e.target as HTMLInputElement).blur();
           if (e.key === "Escape") {
-            setDraft(value);
+            cancelRef.current = true;
             (e.target as HTMLInputElement).blur();
           }
         }}

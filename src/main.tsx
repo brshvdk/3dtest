@@ -1,13 +1,14 @@
+// Стили дизайн-системы — первыми, чтобы стили модулей могли их переопределять.
+import "./styles/tokens.css";
+import "./styles/base.css";
+import "./ui/kit/kit.css";
+import "./app/app.css";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { initTheme } from "./app/theme";
 import { initFromUrl } from "./state/store";
 import { toast } from "./ui/kit";
-import "./styles/tokens.css";
-import "./styles/base.css";
-import "./ui/kit/kit.css";
-import "./app/app.css";
 
 initTheme();
 

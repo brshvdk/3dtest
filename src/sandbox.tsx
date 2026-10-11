@@ -4,14 +4,14 @@
  *   /sandbox.html?m=plan | scene3d | room | openings | skirting | results | print
  * Доп. параметры: &w=360 — ширина колонки для панелей; &dark — тёмная тема.
  */
-import React, { Suspense, lazy, type ComponentType } from "react";
-import ReactDOM from "react-dom/client";
-import { initTheme } from "./app/theme";
-import { ToastHost } from "./ui/kit";
 import "./styles/tokens.css";
 import "./styles/base.css";
 import "./ui/kit/kit.css";
 import "./app/app.css";
+import React, { Suspense, lazy, type ComponentType } from "react";
+import ReactDOM from "react-dom/client";
+import { initTheme } from "./app/theme";
+import { ToastHost } from "./ui/kit";
 
 const q = new URLSearchParams(location.search);
 const m = q.get("m") ?? "plan";

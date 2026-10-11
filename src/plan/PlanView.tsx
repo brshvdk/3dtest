@@ -1,0 +1,459 @@
+/**
+ * 2D-редактор плана — главный инструмент «построй свою комнату».
+ *
+ * Слои (снизу вверх): сетка → пол, мебель, стены, проёмы, плинтус (статично,
+ * мемо по масштабу) → размерные линии → подсветка участка плинтуса →
+ * выделение/ручки/направляющие → HTML-подписи (плашки стен, размеры проёма)
+ * → оверлеи (контекстная панель, масштаб, подсказка, сводка).
+ *
+ * Рисуем в экранных пикселях (мировые метры × масштаб), сдвиг вида — одним
+ * transform у группы: при панорамировании статичные слои не пересчитываются.
+ */
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import type { BBox } from "../domain/geometry";
+import { computeRoomSkirting } from "../domain/skirtingCalc";
+import type { Room } from "../domain/types";
+import { useActiveRoom, useRoomProduct, useWalls } from "../state/hooks";
+import { useAppStore } from "../state/store";
+import { useMediaQuery } from "../ui/kit";
+import { ContextPanel } from "./ContextPanel";
+import { roomBounds, skirtingLines, wallCuts, wallPieces } from "./geom";
+import { AngleChip, layoutWallLabels, OpeningDimChips, SegmentTip, WallLabels } from "./Labels";
+import { SelectionLayer, SkirtHoverLayer, WallDims } from "./Layers";
+import { Hint, ScaleBar, Summary, useHintHidden, ZoomControls } from "./Overlays";
+import { HatchPattern, RoomShapes } from "./Shapes";
+import { useInteraction, type InteractionData } from "./useInteraction";
+import {
+  boxVisible,
+  fitView,
+  lerpView,
+  MAX_SCALE,
+  MIN_SCALE,
+  zoomAt,
+  type Pad,
+  type View,
+} from "./viewport";
+import "./plan.css";
+
+/** Размер элемента (ResizeObserver). */
+function useElementSize(ref: RefObject<HTMLElement>) {
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const measure = () => {
+      const w = el.clientWidth;
+      const h = el.clientHeight;
+      setSize((s) => (s.w === w && s.h === h ? s : { w, h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [ref]);
+  return size;
+}
+
+/** Узкий план: панель — внизу, отступы меньше. */
+const NARROW = 560;
+/**
+ * Подсказка: шире HINT_CENTER — одной строкой между линейкой масштаба и
+ * кнопками; шире HINT_ONE_LINE — одной строкой от левого края (линейка
+ * скрыта, пока подсказка видна); ещё уже — столбиком.
+ */
+const HINT_CENTER = 900;
+const HINT_ONE_LINE = 700;
+type HintMode = "center" | "left" | "stacked";
+const hintMode = (w: number): HintMode => (w >= HINT_CENTER ? "center" : w >= HINT_ONE_LINE ? "left" : "stacked");
+/** мс: показ выделения после тапа откладываем — вдруг это первый тап двойного. */
+const REVEAL_DELAY = 320;
+
+const isNarrow = (w: number, h: number) => w < NARROW || h < 380;
+
+/** Отступы при вписывании: место под плашки размеров и оверлеи (сводка, подсказка). */
+function fitPad(w: number, h: number, hint: boolean, coarse: boolean): Pad {
+  // Подсказка столбиком (3 строки) выше однострочной — снизу нужно больше места под неё и плашки.
+  const hintPad = hintMode(w) === "stacked" ? 128 : 100;
+  // На тач-экране плашки стен стоят дальше от стены.
+  const e = coarse ? 8 : 0;
+  return isNarrow(w, h)
+    ? { top: 78 + e, right: 52 + e, bottom: hint ? hintPad : 44 + e, left: 44 + e }
+    : { top: 84, right: 96, bottom: hint ? hintPad : 72, left: 96 };
+}
+
+/** Сетка: мелкая 10 см (при достаточном масштабе) и крупная 1 м (5 м издалека). */
+function Grid({ view, uid }: { view: View; uid: string }) {
+  const minor = 0.1 * view.s;
+  const majorM = view.s >= 14 ? 1 : 5;
+  const major = majorM * view.s;
+  const minorOpacity = Math.max(0, Math.min(1, (minor - 7) / 9));
+  return (
+    <>
+      <defs>
+        {minorOpacity > 0 ? (
+          <pattern id={`${uid}-gm`} width={minor} height={minor} patternUnits="userSpaceOnUse" x={view.tx} y={view.ty}>
+            <path className="pl-grid pl-grid--minor" d={`M${minor} 0.5H0.5V${minor}`} />
+          </pattern>
+        ) : null}
+        <pattern id={`${uid}-gM`} width={major} height={major} patternUnits="userSpaceOnUse" x={view.tx} y={view.ty}>
+          <path className="pl-grid pl-grid--major" d={`M${major} 0.5H0.5V${major}`} />
+        </pattern>
+      </defs>
+      {minorOpacity > 0 ? (
+        <rect width="100%" height="100%" fill={`url(#${uid}-gm)`} style={{ opacity: minorOpacity }} />
+      ) : null}
+      <rect width="100%" height="100%" fill={`url(#${uid}-gM)`} />
+    </>
+  );
+}
+
+/** Подсказка прячется, когда панель выделения прижата к низу. */
+function HintSlot({
+  coarse,
+  docked,
+  mode,
+  roomId,
+  onClose,
+}: {
+  coarse: boolean;
+  docked: boolean;
+  mode: HintMode;
+  roomId: string;
+  onClose: () => void;
+}) {
+  const hasSel = useAppStore((s) => !!s.selection && s.selection.roomId === roomId);
+  if (docked && hasSel) return null;
+  return <Hint coarse={coarse} stacked={mode === "stacked"} fromLeft={mode === "left"} onClose={onClose} />;
+}
+
+export function PlanView(): JSX.Element {
+  const room = useActiveRoom();
+  const walls = useWalls();
+  const product = useRoomProduct();
+  const coarse = useMediaQuery("(pointer: coarse)");
+  const uid = `pl${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+
+  const hostRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+  const size = useElementSize(hostRef);
+  const sizeRef = useRef(size);
+  sizeRef.current = size;
+
+  const [view, setViewState] = useState<View>({ s: 60, tx: 0, ty: 0 });
+  const viewRef = useRef(view);
+  const [hintHidden, hideHint] = useHintHidden();
+  const hintRef = useRef(!hintHidden);
+  hintRef.current = !hintHidden;
+  const coarseRef = useRef(coarse);
+  coarseRef.current = coarse;
+
+  // Геометрия комнаты — мемо по ссылке на комнату/стены.
+  // Плинтус считаем здесь же (а не отложенной сметой), чтобы линия шла за стеной без задержки.
+  const result = useMemo(
+    () => (room.skirtingEnabled ? computeRoomSkirting(room, product) : undefined),
+    [room, product],
+  );
+  const piecesByWall = useMemo(
+    () => new Map(walls.map((w) => [w.id, wallPieces(w, wallCuts(w, room.openings))])),
+    [walls, room.openings],
+  );
+  const allPieces = useMemo(() => [...piecesByWall.values()].flat(), [piecesByWall]);
+
+  const s = view.s;
+  const skirtW = Math.min(6, Math.max(2.5, product.depth * s));
+  const skirtOffPx = skirtW / 2 + 1.5;
+  const lines = useMemo(
+    () => (result ? skirtingLines(result, skirtOffPx / s) : []),
+    [result, skirtOffPx, s],
+  );
+  const dimPerp = (skirtOffPx + skirtW + 18) / s;
+  const narrow = isNarrow(size.w, size.h);
+  // Плашки стен без наложений (у входящих углов) — общая раскладка для плашек, размерных линий и панели.
+  const labels = useMemo(() => layoutWallLabels(walls, s, narrow, coarse), [walls, s, narrow, coarse]);
+
+  /* ------------------------------ Вид ------------------------------ */
+
+  const dataRef = useRef<InteractionData>({ room, walls, lines, view });
+  dataRef.current = { room, walls, lines, view: viewRef.current };
+
+  const setView = useCallback((v: View) => {
+    viewRef.current = v;
+    dataRef.current = { ...dataRef.current, view: v };
+    setViewState(v);
+  }, []);
+
+  const userMoved = useRef(false);
+  const onUserView = useCallback(() => {
+    userMoved.current = true;
+  }, []);
+
+  const anim = useRef<number | null>(null);
+  const stopAnimation = useCallback(() => {
+    if (anim.current !== null) cancelAnimationFrame(anim.current);
+    anim.current = null;
+  }, []);
+  const revealTimer = useRef<number | null>(null);
+  const cancelReveal = useCallback(() => {
+    if (revealTimer.current !== null) window.clearTimeout(revealTimer.current);
+    revealTimer.current = null;
+  }, []);
+  /** Пользователь взялся за план: останавливаем анимацию вида и отложенный показ выделения. */
+  const interrupt = useCallback(() => {
+    stopAnimation();
+    cancelReveal();
+  }, [stopAnimation, cancelReveal]);
+
+  const animateTo = useCallback(
+    (target: View) => {
+      stopAnimation();
+      const from = viewRef.current;
+      const { w, h } = sizeRef.current;
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      if (reduce || !w || !h) {
+        setView(target);
+        return;
+      }
+      const t0 = performance.now();
+      const dur = 280;
+      const step = (now: number) => {
+        const k = Math.min(1, (now - t0) / dur);
+        const e = 1 - Math.pow(1 - k, 3);
+        setView(k >= 1 ? target : lerpView(from, target, e, w, h));
+        anim.current = k < 1 ? requestAnimationFrame(step) : null;
+      };
+      anim.current = requestAnimationFrame(step);
+    },
+    [setView, stopAnimation],
+  );
+
+  const fitTo = useCallback(
+    (r: Room, animated: boolean) => {
+      const { w, h } = sizeRef.current;
+      if (!w || !h) return;
+      const target = fitView(roomBounds(r), w, h, fitPad(w, h, hintRef.current, coarseRef.current));
+      userMoved.current = false;
+      if (animated) animateTo(target);
+      else {
+        stopAnimation();
+        setView(target);
+      }
+    },
+    [animateTo, setView, stopAnimation],
+  );
+
+  // Показ выделения: если указатель нажат — после отпускания (и только если это был клик).
+  const pendingReveal = useRef<{ dx: number; dy: number } | null>(null);
+  const panBy = useCallback(
+    (dx: number, dy: number) => {
+      const v = viewRef.current;
+      userMoved.current = true;
+      animateTo({ s: v.s, tx: v.tx + dx, ty: v.ty + dy });
+    },
+    [animateTo],
+  );
+  // Комната была на экране целиком до начала перетаскивания?
+  const fitBeforeEdit = useRef(false);
+  const onEditStart = useCallback(() => {
+    const { w, h } = sizeRef.current;
+    fitBeforeEdit.current = !!w && !!h && boxVisible(roomBounds(dataRef.current.room), viewRef.current, w, h, -32);
+  }, []);
+  const onGestureEnd = useCallback(
+    (tap: boolean, edited: boolean) => {
+      const p = pendingReveal.current;
+      pendingReveal.current = null;
+      if (tap && p) {
+        cancelReveal();
+        revealTimer.current = window.setTimeout(() => {
+          revealTimer.current = null;
+          panBy(p.dx, p.dy);
+        }, REVEAL_DELAY);
+      }
+      // Стену/угол вытянули за край экрана — после отпускания показываем комнату целиком.
+      if (edited && fitBeforeEdit.current) {
+        const { w, h } = sizeRef.current;
+        const st = useAppStore.getState();
+        const r = st.project.rooms.find((x) => x.id === st.activeRoomId);
+        if (r && w && h && !boxVisible(roomBounds(r), viewRef.current, w, h, -32)) fitTo(r, true);
+      }
+    },
+    [panBy, cancelReveal, fitTo],
+  );
+
+  const { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onPointerLeave, isBusy, isPressed } =
+    useInteraction({
+      svgRef,
+      hostRef,
+      dataRef,
+      setView,
+      onUserView,
+      stopAnimation: interrupt,
+      onEditStart,
+      onGestureEnd,
+    });
+
+  const onReveal = useCallback(
+    (dx: number, dy: number) => {
+      if (isPressed()) pendingReveal.current = { dx, dy };
+      else panBy(dx, dy);
+    },
+    [isPressed, panBy],
+  );
+
+  // Первый показ и изменение размера: вписываем, пока пользователь сам не двигал вид;
+  // иначе сохраняем центр.
+  const prevSize = useRef<{ w: number; h: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!size.w || !size.h) return;
+    const prev = prevSize.current;
+    prevSize.current = size;
+    if (!prev || !userMoved.current) {
+      fitTo(dataRef.current.room, false);
+      return;
+    }
+    const v = viewRef.current;
+    setView({ s: v.s, tx: v.tx + (size.w - prev.w) / 2, ty: v.ty + (size.h - prev.h) / 2 });
+  }, [size, fitTo, setView]);
+
+  // Смена комнаты/шаблона — вписываем. Правка извне (панель, отмена), после
+  // которой комната перестала помещаться, — тоже. Свои перетаскивания — нет.
+  const prevRoom = useRef<{ id: string; shape: string; bounds: BBox } | null>(null);
+  useEffect(() => {
+    const bounds = roomBounds(room);
+    const prev = prevRoom.current;
+    prevRoom.current = { id: room.id, shape: room.shape, bounds };
+    const { w, h } = sizeRef.current;
+    if (!prev || !w || !h) return;
+    if (prev.id !== room.id) {
+      fitTo(room, false);
+      return;
+    }
+    if (isBusy()) return;
+    if (prev.shape !== room.shape && room.shape !== "custom") {
+      fitTo(room, true);
+      return;
+    }
+    // «Видна» — с запасом под плашки размеров у краёв.
+    const v = viewRef.current;
+    if (boxVisible(prev.bounds, v, w, h, -32) && !boxVisible(bounds, v, w, h, -32)) fitTo(room, true);
+  }, [room, fitTo, isBusy]);
+
+  useEffect(() => interrupt, [interrupt]);
+
+  const onFit = useCallback(() => fitTo(dataRef.current.room, true), [fitTo]);
+  const onZoom = useCallback(
+    (factor: number) => {
+      const { w, h } = sizeRef.current;
+      userMoved.current = true;
+      animateTo(zoomAt(viewRef.current, w / 2, h / 2, factor));
+    },
+    [animateTo],
+  );
+
+  /* ------------------------------ Рендер ------------------------------ */
+
+  const ready = size.w > 0 && size.h > 0;
+  const translate = `translate(${Math.round(view.tx * 100) / 100} ${Math.round(view.ty * 100) / 100})`;
+  const htmlTransform = `translate(${view.tx}px, ${view.ty}px)`;
+
+  return (
+    <div
+      ref={hostRef}
+      className={`pl-root${narrow ? " is-narrow" : ""}${coarse ? " is-coarse" : ""}`}
+    >
+      <svg
+        ref={svgRef}
+        className="pl-svg"
+        width={size.w || undefined}
+        height={size.h || undefined}
+        role="img"
+        aria-label={`План комнаты «${room.name}»`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onPointerLeave={onPointerLeave}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <defs>
+          <HatchPattern id={`${uid}-hatch`} />
+        </defs>
+        {ready ? <Grid view={view} uid={uid} /> : null}
+        {ready ? (
+          <g transform={translate}>
+            <RoomShapes
+              room={room}
+              walls={walls}
+              pieces={allPieces}
+              s={s}
+              lines={lines}
+              skirtWidth={skirtW}
+              skirtH={product.height}
+              hatchId={`${uid}-hatch`}
+            />
+            <WallDims walls={walls} layout={labels} s={s} />
+            <SkirtHoverLayer lines={lines} s={s} width={skirtW} />
+            <SelectionLayer
+              room={room}
+              walls={walls}
+              piecesByWall={piecesByWall}
+              s={s}
+              dimPerp={dimPerp}
+              coarse={coarse}
+            />
+          </g>
+        ) : null}
+      </svg>
+
+      {ready ? (
+        <div className="pl-html" style={{ transform: htmlTransform }}>
+          <WallLabels room={room} walls={walls} layout={labels} s={s} along={narrow} />
+          <OpeningDimChips room={room} walls={walls} s={s} dimPerp={dimPerp} />
+          <AngleChip room={room} s={s} />
+          <SegmentTip lines={lines} s={s} />
+        </div>
+      ) : null}
+
+      {ready ? (
+        <>
+          <Summary room={room} result={result} />
+          <ZoomControls onFit={onFit} onZoom={onZoom} canIn={s < MAX_SCALE - 1e-6} canOut={s > MIN_SCALE + 1e-6} />
+          {hintHidden || (!narrow && hintMode(size.w) !== "left") ? (
+            <div className="pl-bottom-left">
+              <ScaleBar s={s} />
+            </div>
+          ) : null}
+          {hintHidden ? null : (
+            <HintSlot
+              coarse={coarse}
+              docked={narrow}
+              mode={hintMode(size.w)}
+              roomId={room.id}
+              onClose={hideHint}
+            />
+          )}
+          <ContextPanel
+            room={room}
+            walls={walls}
+            view={view}
+            width={size.w}
+            height={size.h}
+            docked={narrow}
+            dimPerp={dimPerp}
+            skirtH={product.height}
+            labels={labels}
+            onReveal={onReveal}
+          />
+        </>
+      ) : null}
+    </div>
+  );
+}
