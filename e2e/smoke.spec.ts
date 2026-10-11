@@ -36,7 +36,9 @@ test("добавление двери уменьшает длину плинту
   await page.getByRole("tab", { name: /Проёмы/ }).click();
   await page.getByRole("button", { name: /^Дверь$/ }).first().click();
   // Новый проём появился в списке
-  await expect(page.getByText(/Дверь \d+×\d+ см/).first()).toBeVisible();
+  await expect(
+    page.getByRole("list", { name: "Проёмы комнаты" }).getByRole("listitem"),
+  ).toHaveCount(3);
   await page.waitForTimeout(500);
   expect(await readNet()).not.toBe(before);
 });
@@ -45,7 +47,7 @@ test("отмена и повтор работают", async ({ page, isMobile })
   test.skip(isMobile, "кнопки истории скрыты в узкой шапке — проверяем на десктопе");
   await fresh(page);
   await page.getByRole("tab", { name: /Проёмы/ }).click();
-  const items = page.getByText(/(Дверь|Окно) \d+×\d+ см/);
+  const items = page.getByRole("list", { name: "Проёмы комнаты" }).getByRole("listitem");
   const n0 = await items.count();
   await page.getByRole("button", { name: /^Окно$/ }).first().click();
   await expect(items).toHaveCount(n0 + 1);

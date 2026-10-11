@@ -181,7 +181,7 @@ export function OpeningsPanel() {
         {sorted.length === 0 ? (
           <EmptyState />
         ) : (
-          <div className="pn-oplist">
+          <div className="pn-oplist" role="list" aria-label="Проёмы комнаты">
             {sorted.map((o) => (
               <OpeningItem
                 key={o.id}
@@ -321,7 +321,7 @@ const OpeningItem = memo(function OpeningItem({
   const title = openingTitle(o);
 
   return (
-    <div ref={ref} className={`pn-op${selected ? " is-open" : ""}`}>
+    <div ref={ref} role="listitem" className={`pn-op${selected ? " is-open" : ""}`}>
       <button
         type="button"
         className="pn-op__head"
