@@ -8,7 +8,7 @@ import { usePanelTyping } from "./app/usePanelTyping";
 import { useCrossTabSync } from "./app/useCrossTabSync";
 import { ResultsPanel } from "./results/ResultsPanel";
 import { PrintSheet } from "./results/PrintSheet";
-import { ToastHost, useIsCompact, useIsMobile, useMediaQuery } from "./ui/kit";
+import { DialogHost, ToastHost, useIsCompact, useIsMobile, useMediaQuery } from "./ui/kit";
 
 export default function App() {
   useHotkeys();
@@ -57,6 +57,7 @@ export default function App() {
         ) : null}
       </div>
       <ToastHost />
+      <DialogHost />
       <PrintSheet />
     </div>
   );

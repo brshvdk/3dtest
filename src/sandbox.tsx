@@ -11,7 +11,7 @@ import "./app/app.css";
 import React, { Suspense, lazy, type ComponentType } from "react";
 import ReactDOM from "react-dom/client";
 import { initTheme } from "./app/theme";
-import { ToastHost } from "./ui/kit";
+import { DialogHost, ToastHost } from "./ui/kit";
 
 const q = new URLSearchParams(location.search);
 const m = q.get("m") ?? "plan";
@@ -59,5 +59,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
       )}
     </Suspense>
     <ToastHost />
+      <DialogHost />
   </React.StrictMode>,
 );

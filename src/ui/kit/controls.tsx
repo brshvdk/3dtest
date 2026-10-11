@@ -26,7 +26,7 @@ import { Icon, type IconName } from "./Icon";
 
 /* ------------------------------- Button ------------------------------ */
 
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "accent";
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "danger-solid" | "accent";
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -396,14 +396,27 @@ function NumericInput({
 
   const onKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
+      // Применяем и остаёмся в поле (фокус не улетает на <body>) — удобно
+      // поправить ещё раз; текст выделяется для следующего ввода.
       commit();
-      skipBlurRef.current = true;
-      ref.current?.blur();
-    } else if (e.key === "Escape") {
-      dirtyRef.current = false;
       setDraft(text);
-      skipBlurRef.current = true;
-      ref.current?.blur();
+      const el = ref.current;
+      requestAnimationFrame(() => {
+        if (el && document.activeElement === el) el.select();
+      });
+    } else if (e.key === "Escape") {
+      if (dirtyRef.current) {
+        // Первый Esc — отменить напечатанное, оставаясь в поле.
+        e.stopPropagation();
+        dirtyRef.current = false;
+        setDraft(text);
+        const el = ref.current;
+        requestAnimationFrame(() => el?.select());
+      } else {
+        // Правок нет — выходим из поля; событие идёт дальше (закрыть панель и т.п.).
+        skipBlurRef.current = true;
+        ref.current?.blur();
+      }
     } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
       e.preventDefault();
       // Напечатанное, но не применённое значение — сначала применяем.

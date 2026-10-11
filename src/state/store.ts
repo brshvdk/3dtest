@@ -69,6 +69,8 @@ export interface AppState {
   selection: Selection;
   /** Подсветка участка плинтуса между планом/3D/раскроем. */
   hoverSegmentId: string | null;
+  /** Подсветка стены активной комнаты при наведении в панелях (план/3D). */
+  hoverWallId: string | null;
   view: ViewMode;
   panelTab: PanelTab;
   /** История (≤ 100). */
@@ -121,6 +123,7 @@ export interface AppState {
   setAppearance(patch: Partial<Appearance>): void;
   select(sel: Selection): void;
   setHoverSegment(id: string | null): void;
+  setHoverWall(id: string | null): void;
   setView(v: ViewMode): void;
   setPanelTab(t: PanelTab): void;
 }
@@ -479,6 +482,7 @@ export const useAppStore = create<AppState>()(
         activeRoomId: initial.rooms[0].id,
         selection: null,
         hoverSegmentId: null,
+        hoverWallId: null,
         view: "split",
         panelTab: "room",
         past: [],
@@ -681,6 +685,9 @@ export const useAppStore = create<AppState>()(
         },
         setHoverSegment: (id) => {
           if (get().hoverSegmentId !== id) set({ hoverSegmentId: id });
+        },
+        setHoverWall: (id) => {
+          if (get().hoverWallId !== id) set({ hoverWallId: id });
         },
         setView: (view) => {
           if (VIEWS.includes(view) && get().view !== view) set({ view });
